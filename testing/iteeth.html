@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>I-Teeth Digital Oral Diagnosis Form</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/4.1.1/tesseract.min.js"></script>
+<style>
+:root{
+  --ink:#1c2b33; --sub:#5b7078; --line:#d8e2e4; --bg:#f4f8f7; --panel:#ffffff;
+  --teal:#0e6e63; --teal-d:#0a4f47; --amber:#c8791a; --danger:#b3432b;
+  --focus:#0e6e63;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --ink:#e7f0ee; --sub:#9fb3b0; --line:#2a3a3c; --bg:#101817; --panel:#16211f; --focus:#39a394; }
+}
+:root[data-theme="dark"]{ --ink:#e7f0ee; --sub:#9fb3b0; --line:#2a3a3c; --bg:#101817; --panel:#16211f; --focus:#39a394; }
+*{box-sizing:border-box;}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Iowan Old Style","Georgia",serif;}
+.wrap{max-width:980px;margin:0 auto;padding:28px 20px 80px;}
+h1{font-family:"Iowan Old Style",Georgia,serif;font-size:26px;margin:0 0 2px;letter-spacing:.2px;}
+.tag{color:var(--sub);font-size:13px;margin:0 0 22px;}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:20px 22px;margin-bottom:18px;}
+.card h2{font-size:15px;text-transform:none;margin:0 0 14px;color:var(--teal-d);border-bottom:2px solid var(--line);padding-bottom:8px;font-family:system-ui,sans-serif;font-weight:700;}
+:root[data-theme="dark"] .card h2, :root:not([data-theme="light"]) .card h2{color:#6fc8ba}
+.grid{display:grid;gap:12px;}
+.g2{grid-template-columns:1fr 1fr;} .g3{grid-template-columns:1fr 1fr 1fr;} .g4{grid-template-columns:1fr 1fr 1fr 1fr;}
+@media(max-width:640px){.g2,.g3,.g4{grid-template-columns:1fr;}}
+label{display:block;font:600 12px system-ui,sans-serif;color:var(--sub);margin-bottom:4px;}
+input[type=text],input[type=date],input[type=number],textarea,select{
+  width:100%;padding:8px 9px;border:1px solid var(--line);border-radius:4px;background:transparent;color:var(--ink);
+  font:14px system-ui,sans-serif;
+}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--focus);outline-offset:1px;}
+textarea{resize:vertical;font-family:system-ui,sans-serif;}
+.field{margin-bottom:0;}
+.row-with-mic{display:flex;gap:8px;align-items:flex-start;}
+.row-with-mic textarea, .row-with-mic input{flex:1;}
+button{cursor:pointer;font:600 13px system-ui,sans-serif;border-radius:5px;border:1px solid var(--teal);background:var(--teal);color:#fff;padding:8px 13px;}
+button.ghost{background:transparent;color:var(--teal-d);}
+:root:not([data-theme="light"]) button.ghost{color:#6fc8ba}
+button.small{padding:5px 9px;font-size:12px;}
+button.mic{padding:8px 10px;min-width:38px;}
+button.mic.on{background:var(--danger);border-color:var(--danger);}
+button:disabled{opacity:.5;cursor:not-allowed;}
+.checks{display:grid;grid-template-columns:repeat(4,1fr);gap:6px 14px;}
+@media(max-width:640px){.checks{grid-template-columns:repeat(2,1fr);}}
+.chk{display:flex;align-items:center;gap:6px;font:14px system-ui,sans-serif;}
+.chk input{width:auto;}
+.note{font:italic 12.5px system-ui,sans-serif;color:var(--sub);margin:6px 0 0;}
+.legend{font:12.5px system-ui,sans-serif;color:var(--sub);background:rgba(14,110,99,.06);border:1px solid var(--line);border-radius:5px;padding:10px 12px;margin-bottom:14px;}
+.legend b{color:var(--ink);}
+.odonto{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-bottom:10px;}
+@media(max-width:760px){.odonto{grid-template-columns:repeat(4,1fr);}}
+.tooth{border:1px solid var(--line);border-radius:5px;padding:6px;text-align:center;}
+.tooth .num{font:700 12px system-ui,sans-serif;margin-bottom:3px;}
+.tooth select{padding:4px;font-size:12px;}
+table{width:100%;border-collapse:collapse;font:13px system-ui,sans-serif;}
+th,td{border:1px solid var(--line);padding:6px;text-align:left;}
+th{background:rgba(14,110,99,.08);font-size:12px;}
+td input{border:none;padding:3px;font-size:13px;}
+.toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px;}
+.toolbar select{width:auto;max-width:220px;}
+.pillbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.ocrbox textarea{min-height:110px;font:12.5px/1.4 monospace;}
+.linelist .field{margin-bottom:8px;}
+.status{font:12.5px system-ui,sans-serif;color:var(--teal-d);min-height:16px;}
+:root:not([data-theme="light"]) .status{color:#6fc8ba}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>I-Teeth — Digital Oral Diagnosis Form</h1>
+  <p class="tag">CEU Makati Dentistry Department · vision-based auto-fill and voice-to-text, with clinician verification</p>
+
+  <div class="toolbar">
+    <button id="newBtn">+ New Form</button>
+    <select id="loadSelect"><option value="">Load saved patient…</option></select>
+    <button class="ghost" id="loadBtn">Load</button>
+    <button class="ghost" id="saveBtn">💾 Save</button>
+    <button class="ghost" id="printBtn">🖨 Print</button>
+    <button class="ghost" id="exportBtn">⬇ Export JSON</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div id="diagBanner" class="legend" style="display:none"></div>
+
+  <div class="card ocrbox">
+    <h2>Vision-Based Capture (OCR)</h2>
+    <p class="note" style="margin-top:0">Upload a photo of a completed paper form. Extracted text appears below for you to review, then insert into the field of your choice — nothing is auto-saved without your confirmation.</p>
+    <input type="file" id="ocrFile" accept="image/*">
+    <div id="ocrProgress" class="status"></div>
+    <textarea id="ocrText" placeholder="Extracted text will appear here…"></textarea>
+    <div class="pillbar">
+      <select id="ocrTarget">
+        <option value="hpi">→ History of Present Illness</option>
+        <option value="cc1">→ Chief Complaint 1</option>
+        <option value="radiographic">→ Radiographic Interpretation</option>
+        <option value="ciRemarks">→ CI's Remarks</option>
+      </select>
+      <button class="small" id="ocrInsert">Insert into field</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Patient Information</h2>
+    <div class="grid g3">
+      <div class="field"><label>Name</label><input id="name" type="text"></div>
+      <div class="field"><label>Birth Date</label><input id="birthDate" type="date"></div>
+      <div class="field"><label>Age</label><input id="age" type="number"></div>
+      <div class="field"><label>Sex</label><select id="sex"><option></option><option>Male</option><option>Female</option></select></div>
+      <div class="field"><label>Height</label><input id="ht" type="text"></div>
+      <div class="field"><label>Weight</label><input id="wt" type="text"></div>
+      <div class="field"><label>Civil Status</label><input id="civilStatus" type="text"></div>
+      <div class="field"><label>Home Tel. No.</label><input id="homeTel" type="text"></div>
+      <div class="field"><label>Cell Phone No.</label><input id="cell" type="text"></div>
+      <div class="field"><label>Nationality</label><input id="nationality" type="text"></div>
+      <div class="field"><label>Occupation</label><input id="occupation" type="text"></div>
+      <div class="field"><label>Religion</label><input id="religion" type="text"></div>
+    </div>
+    <div class="field" style="margin-top:12px"><label>Home Address</label><input id="address" type="text"></div>
+  </div>
+
+  <div class="card">
+    <h2>A. Chief Complaint/s</h2>
+    <div class="linelist" id="ccList"></div>
+  </div>
+
+  <div class="card">
+    <h2>B. History of Present Illness</h2>
+    <div class="row-with-mic">
+      <textarea id="hpi" rows="4"></textarea>
+      <button class="mic" data-target="hpi" title="Dictate">🎤</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>C. Past History</h2>
+    <p class="note" style="margin-top:0">Medical — check any condition that is present:</p>
+    <div class="checks" id="medicalChecks"></div>
+    <div class="grid g2" style="margin-top:10px">
+      <div class="field"><label>Allergy, specify</label><input id="allergy" type="text"></div>
+      <div class="field"><label>Other Illnesses</label><input id="otherIllness" type="text"></div>
+      <div class="field"><label>Medications currently taking</label><input id="meds" type="text"></div>
+    </div>
+    <p class="note">Dental —</p>
+    <div class="grid g3">
+      <div class="field"><label>Previous Extraction</label><select id="prevExtraction"><option></option><option>Yes</option><option>No</option></select></div>
+      <div class="field"><label>If yes, when?</label><input id="extractionWhen" type="text"></div>
+      <div class="field"><label>Denture</label><select id="denture"><option>None</option><option>Upper</option><option>Lower</option><option>Upper &amp; Lower</option></select></div>
+      <div class="field"><label>Upper Type / Since</label><input id="dentureUpper" type="text"></div>
+      <div class="field"><label>Lower Type / Since</label><input id="dentureLower" type="text"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Clinical Examination — A. Extraoral</h2>
+    <div class="grid g4">
+      <div class="field"><label>Head</label><select id="head"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Head, if abnormal specify</label><input id="headSpec" type="text"></div>
+      <div class="field"><label>Eyes</label><select id="eyes"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Eyes, if abnormal specify</label><input id="eyesSpec" type="text"></div>
+      <div class="field"><label>TMJ</label><select id="tmj"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>TMJ, if abnormal specify</label><input id="tmjSpec" type="text"></div>
+    </div>
+    <p class="note">Vital Signs —</p>
+    <div class="grid g4">
+      <div class="field"><label>Blood Pressure</label><input id="bp" type="text"></div>
+      <div class="field"><label>Pulse Rate</label><input id="pulse" type="text"></div>
+      <div class="field"><label>Respiratory Rate</label><input id="resp" type="text"></div>
+      <div class="field"><label>Temperature</label><input id="temp" type="text"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>B. Intraoral</h2>
+    <div class="grid g4">
+      <div class="field"><label>Lip</label><select id="lip"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Lip, specify</label><input id="lipSpec" type="text"></div>
+      <div class="field"><label>Palate</label><select id="palate"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Palate, specify</label><input id="palateSpec" type="text"></div>
+      <div class="field"><label>Floor of Mouth</label><select id="floor"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Floor, specify</label><input id="floorSpec" type="text"></div>
+      <div class="field"><label>Tongue</label><select id="tongue"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Tongue, specify</label><input id="tongueSpec" type="text"></div>
+      <div class="field"><label>Gingiva</label><select id="gingiva"><option>Normal</option><option>Abnormal</option></select></div>
+      <div class="field"><label>Gingiva, specify</label><input id="gingivaSpec" type="text"></div>
+      <div class="field"><label>Deposits</label><select id="deposits"><option>Soft</option><option>Hard</option></select></div>
+      <div class="field"><label>Occlusion</label><select id="occlusion"><option>Class I</option><option>Class II</option><option>Class III</option></select></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Other Oral Abnormalities Noted</label><input id="otherOral" type="text"></div>
+  </div>
+
+  <div class="card">
+    <h2>C. Mouth Examination — Odontogram</h2>
+    <div class="legend">
+      <b>Red code:</b> C-Caries · Abr-Abrasion · Fr-Fracture · Ex-Indicated for Extraction · X-Missing &nbsp;|&nbsp;
+      <b>Blue code:</b> /-Present w/o caries · Am-Amalgam · Co-Composite · GI-Glass Ionomer · TF-Temporary Filling · L-Laminates · UN-Unerupted · P-Partially Erupted · JC-Jacket Crown · FPD · RPD
+    </div>
+    <div class="odonto" id="odontoUpper"></div>
+    <div class="odonto" id="odontoLower"></div>
+  </div>
+
+  <div class="card">
+    <h2>D. Diagnostic Test</h2>
+    <table id="diagTable">
+      <thead><tr><th>Tooth No.</th><th>Mobility</th><th>Palpation</th><th>Percussion</th><th>Test Cavity</th><th>Hot Test (dur.)</th><th>Cold Test (dur.)</th><th>Anesthetic Test</th><th>Electric Pulp Test</th><th></th></tr></thead>
+      <tbody id="diagBody"></tbody>
+    </table>
+    <div class="pillbar"><button class="small ghost" id="addDiagRow">+ Add row</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Radiographic Interpretation</h2>
+    <div class="row-with-mic">
+      <textarea id="radiographic" rows="3"></textarea>
+      <button class="mic" data-target="radiographic" title="Dictate">🎤</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Tentative Diagnosis</h2>
+    <div class="linelist" id="diagList"></div>
+    <div class="grid g3" style="margin-top:10px">
+      <div class="field"><label>Examined by</label><input id="examinedBy" type="text"></div>
+      <div class="field"><label>Date</label><input id="examDate" type="date"></div>
+      <div class="field"><label>Clinic Level</label><input id="clinicLevel" type="text"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Recommended Treatment Plan</h2>
+    <div class="linelist" id="planList"></div>
+  </div>
+
+  <div class="card">
+    <h2>C.I.'s Remarks</h2>
+    <div class="row-with-mic">
+      <textarea id="ciRemarks" rows="3"></textarea>
+      <button class="mic" data-target="ciRemarks" title="Dictate">🎤</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const $ = id => document.getElementById(id);
+  const status = msg => { $('status').textContent = msg; setTimeout(()=>{ if($('status').textContent===msg) $('status').textContent=''; }, 7000); };
+
+  // ---- Up-front diagnostics, shown immediately without needing to click anything ----
+  (function diagnose(){
+    const inIframe = window.self !== window.top;
+    const hasSR = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    const secure = window.isSecureContext !== false;
+    const banner = $('diagBanner');
+    if(inIframe){
+      banner.style.display = 'block';
+      banner.innerHTML = '<b>You are viewing this inside an embedded preview.</b> Voice input (and camera/mic features generally) are blocked inside embedded previews by the browser. Open this page in its own tab using the link/share button for this artifact, then try the mic again from there.';
+    } else if(!hasSR){
+      banner.style.display = 'block';
+      banner.innerHTML = '<b>This browser does not support voice input.</b> Detected: ' + (navigator.userAgent) + '. Please open this page in Google Chrome or Microsoft Edge on desktop, or Chrome on Android — Safari and Firefox do not reliably support this feature.';
+    } else if(!secure){
+      banner.style.display = 'block';
+      banner.innerHTML = '<b>This page is not running in a secure context.</b> Voice input requires https. Reload the page using its https link.';
+    } else {
+      banner.style.display = 'block';
+      banner.style.background = 'rgba(14,110,99,.06)';
+      banner.innerHTML = '<b>Voice input should work here.</b> Click a 🎤 button, then click "Allow" if your browser asks for microphone permission. If you do not see a permission prompt, click the padlock icon in your address bar and check the Microphone permission for this site.';
+    }
+  })();
+
+  const MED_CONDITIONS = ["Rheumatic Heart Disease","Myocardial Infarct","Cerebro-Vascular Accident","Asthma","Diabetes","Liver Disease","Stomach Ulcers","Kidney Disease","Pregnancy","T.B.","Hypertension","Hypotension"];
+  const medBox = $('medicalChecks');
+  MED_CONDITIONS.forEach(c=>{
+    const id = 'med_'+c.replace(/[^a-z0-9]/gi,'');
+    medBox.insertAdjacentHTML('beforeend', `<label class="chk"><input type="checkbox" id="${id}" data-cond="${c}">${c}</label>`);
+  });
+
+  // Chief complaints, tentative diagnosis, treatment plan: repeatable numbered lines
+  function buildLines(containerId, prefix, count, placeholder){
+    const el = $(containerId);
+    for(let i=1;i<=count;i++){
+      el.insertAdjacentHTML('beforeend', `<div class="field"><label>${i}.</label><input type="text" id="${prefix}${i}" placeholder="${placeholder||''}"></div>`);
+    }
+  }
+  buildLines('ccList','cc',4);
+  buildLines('diagList','dx',6);
+  buildLines('planList','plan',6);
+
+  // Odontogram — FDI permanent dentition
+  const CODES = ["","/","C","Abr","Fr","Am","Co","GI","TF","L","UN","P","JC","FPD","RPD","Ex","X"];
+  const upperTeeth = [18,17,16,15,14,13,12,11,21,22,23,24,25,26,27,28];
+  const lowerTeeth = [48,47,46,45,44,43,42,41,31,32,33,34,35,36,37,38];
+  function buildOdonto(containerId, teeth){
+    const el = $(containerId);
+    teeth.forEach(t=>{
+      const opts = CODES.map(c=>`<option value="${c}">${c||'—'}</option>`).join('');
+      el.insertAdjacentHTML('beforeend', `<div class="tooth"><div class="num">${t}</div><select id="tooth_${t}">${opts}</select></div>`);
+    });
+  }
+  buildOdonto('odontoUpper', upperTeeth);
+  buildOdonto('odontoLower', lowerTeeth);
+
+  // Diagnostic test table rows
+  const diagCols = ['tooth','mobility','palpation','percussion','cavity','hot','cold','anesthetic','ept'];
+  function addDiagRow(vals){
+    vals = vals || {};
+    const tr = document.createElement('tr');
+    tr.innerHTML = diagCols.map(c=>`<td><input type="text" class="diag-${c}" value="${vals[c]||''}"></td>`).join('') + `<td><button class="small ghost rm">✕</button></td>`;
+    tr.querySelector('.rm').onclick = ()=> tr.remove();
+    $('diagBody').appendChild(tr);
+  }
+  addDiagRow(); addDiagRow(); addDiagRow();
+  $('addDiagRow').onclick = ()=> addDiagRow();
+
+  // ---- Voice-to-text (Web Speech API) ----
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const isSecure = window.isSecureContext !== false;
+  document.querySelectorAll('button.mic').forEach(btn=>{
+    if(!SR){
+      btn.title = 'Voice input is not supported in this browser — try Chrome or Edge on desktop.';
+      btn.onclick = ()=> status('Voice input is not supported in this browser. Please try Chrome or Edge.');
+      btn.style.opacity = '.55';
+      return;
+    }
+    if(!isSecure){
+      btn.onclick = ()=> status('Voice input needs a secure (https) page. This link should already be https — try reloading it directly in a new tab.');
+      btn.style.opacity = '.55';
+      return;
+    }
+    let rec = null, active = false;
+    btn.onclick = ()=>{
+      const field = $(btn.dataset.target);
+      if(active){ rec && rec.stop(); return; }
+      try{
+        rec = new SR();
+      }catch(err){
+        status('Could not start voice input: ' + err.message); return;
+      }
+      rec.lang = 'en-US'; rec.interimResults = false; rec.continuous = true;
+      rec.onstart = ()=>{ active = true; btn.classList.add('on'); status('Listening… click the mic again to stop.'); };
+      rec.onerror = (e)=>{
+        active = false; btn.classList.remove('on');
+        let msg = 'Voice input error: ' + e.error + '.';
+        if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+          msg = 'Microphone access is blocked. Click the 🔒 icon in the address bar, set Microphone to Allow, then reload this page.';
+        } else if(e.error === 'no-speech'){
+          msg = 'No speech detected — click the mic and try again.';
+        } else if(e.error === 'network'){
+          msg = 'Voice recognition needs an internet connection. Check your connection and try again.';
+        }
+        status(msg);
+      };
+      rec.onend = ()=>{ active = false; btn.classList.remove('on'); };
+      rec.onresult = (e)=>{
+        let t = '';
+        for(let i=e.resultIndex;i<e.results.length;i++){ t += e.results[i][0].transcript; }
+        field.value = (field.value ? field.value + ' ' : '') + t.trim();
+      };
+      try{
+        rec.start();
+      }catch(err){
+        status('Could not start listening: ' + err.message + '. Try clicking the mic again.');
+      }
+    };
+  });
+
+  // ---- OCR (Tesseract.js) ----
+  $('ocrFile').addEventListener('change', async (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    $('ocrProgress').textContent = 'Reading image…';
+    try{
+      const { data } = await Tesseract.recognize(file, 'eng', {
+        logger: m => { if(m.status==='recognizing text') $('ocrProgress').textContent = 'Recognizing text… ' + Math.round((m.progress||0)*100) + '%'; }
+      });
+      $('ocrText').value = data.text.trim();
+      $('ocrProgress').textContent = 'Done — review the extracted text below before inserting it anywhere.';
+    }catch(err){
+      $('ocrProgress').textContent = 'Could not read this image. Try a clearer, well-lit photo.';
+    }
+  });
+  const OCR_TARGET_MAP = { hpi:'hpi', cc1:'cc1', radiographic:'radiographic', ciRemarks:'ciRemarks' };
+  $('ocrInsert').onclick = ()=>{
+    const text = $('ocrText').value.trim(); if(!text) return;
+    const field = $(OCR_TARGET_MAP[$('ocrTarget').value]);
+    field.value = (field.value ? field.value + ' ' : '') + text;
+    status('Inserted — please verify against the original form.');
+  };
+
+  // ---- Collect / populate form state ----
+  const SIMPLE_IDS = ["name","birthDate","age","sex","ht","wt","civilStatus","homeTel","cell","nationality","occupation","religion","address",
+    "hpi","allergy","otherIllness","meds","prevExtraction","extractionWhen","denture","dentureUpper","dentureLower",
+    "head","headSpec","eyes","eyesSpec","tmj","tmjSpec","bp","pulse","resp","temp",
+    "lip","lipSpec","palate","palateSpec","floor","floorSpec","tongue","tongueSpec","gingiva","gingivaSpec","deposits","occlusion","otherOral",
+    "radiographic","examinedBy","examDate","clinicLevel","ciRemarks"];
+
+  function collect(){
+    const rec = {};
+    SIMPLE_IDS.forEach(id => rec[id] = $(id).value);
+    for(let i=1;i<=4;i++) rec['cc'+i] = $('cc'+i).value;
+    for(let i=1;i<=6;i++){ rec['dx'+i] = $('dx'+i).value; rec['plan'+i] = $('plan'+i).value; }
+    rec.medical = [...medBox.querySelectorAll('input[type=checkbox]')].filter(c=>c.checked).map(c=>c.dataset.cond);
+    rec.teeth = {};
+    [...upperTeeth, ...lowerTeeth].forEach(t=>{ const v = $('tooth_'+t).value; if(v) rec.teeth[t] = v; });
+    rec.diag = [...document.querySelectorAll('#diagBody tr')].map(tr=>{
+      const o = {}; diagCols.forEach(c=> o[c] = tr.querySelector('.diag-'+c).value); return o;
+    });
+    rec.savedAt = new Date().toISOString();
+    return rec;
+  }
+
+  function populate(rec){
+    SIMPLE_IDS.forEach(id => { if(id in rec) $(id).value = rec[id]; });
+    for(let i=1;i<=4;i++) if(rec['cc'+i]!==undefined) $('cc'+i).value = rec['cc'+i];
+    for(let i=1;i<=6;i++){ if(rec['dx'+i]!==undefined) $('dx'+i).value = rec['dx'+i]; if(rec['plan'+i]!==undefined) $('plan'+i).value = rec['plan'+i]; }
+    medBox.querySelectorAll('input[type=checkbox]').forEach(c=> c.checked = (rec.medical||[]).includes(c.dataset.cond));
+    [...upperTeeth, ...lowerTeeth].forEach(t=>{ $('tooth_'+t).value = (rec.teeth && rec.teeth[t]) || ''; });
+    $('diagBody').innerHTML = '';
+    (rec.diag && rec.diag.length ? rec.diag : [{},{},{}]).forEach(addDiagRow);
+  }
+
+  function resetForm(){ populate({}); $('diagBody').innerHTML=''; addDiagRow();addDiagRow();addDiagRow(); }
+
+  // ---- Storage (per-browser demo; a production deployment would use the centralized database described in Chapter 3) ----
+  const KEY = 'iteeth_patients_v1';
+  function loadAll(){ try{ return JSON.parse(localStorage.getItem(KEY)||'{}'); }catch(e){ return {}; } }
+  function saveAll(all){ try{ localStorage.setItem(KEY, JSON.stringify(all)); }catch(e){ status('Could not save — storage unavailable.'); } }
+  function refreshSelect(){
+    const all = loadAll();
+    const sel = $('loadSelect'); sel.innerHTML = '<option value="">Load saved patient…</option>';
+    Object.keys(all).forEach(name=> sel.insertAdjacentHTML('beforeend', `<option value="${name}">${name}</option>`));
+  }
+  refreshSelect();
+
+  $('saveBtn').onclick = ()=>{
+    const rec = collect();
+    const name = (rec.name||'').trim();
+    if(!name){ status("Enter the patients name before saving."); return; }
+    const all = loadAll(); all[name] = rec; saveAll(all); refreshSelect();
+    status('Saved "' + name + '" to this browser.');
+  };
+  $('loadBtn').onclick = ()=>{
+    const name = $('loadSelect').value; if(!name) return;
+    const all = loadAll(); if(all[name]) populate(all[name]);
+    status('Loaded "' + name + '".');
+  };
+  $('newBtn').onclick = ()=>{ if(confirm('Clear the form for a new patient?')) resetForm(); };
+  $('exportBtn').onclick = ()=>{
+    const rec = collect();
+    const blob = new Blob([JSON.stringify(rec,null,2)], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = (rec.name||'patient').replace(/\s+/g,'_') + '_oral_diagnosis.json';
+    a.click();
+  };
+  $('printBtn').onclick = ()=> window.print();
+
+  resetForm();
+})();
+</script>
+</body>
+</html>
