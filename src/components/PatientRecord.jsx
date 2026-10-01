@@ -5,7 +5,7 @@ import { normalizeRole, canUploadODF } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
 
 const MOCK_PATIENTS = [
-  { id: "10000001", name: "John Doe", lastVisit: "01/01/2026", clinician: "Dr. Jane Doe, MD" },
+  { id: "10000001", name: "John Doe", lastVisit: "01/01/2026", clinician: DEFAULT_CLINICIAN },
 ];
 const ROWS = 7;
 
@@ -13,31 +13,17 @@ export default function PatientRecord({
   onNavigate,
   patients = MOCK_PATIENTS,
   onViewRecords = () => {},
-  onAddPatient = () => {},
   onUploadODF = () => {},
   isSyncing = false,
   currentUser,
   onSignOut,
 }) {
   const [query, setQuery] = useState("");
-  const [showAddModal, setShowAddModal] = useState(false);
   const [showOdfModal, setShowOdfModal] = useState(false);
+  const [selectedPatientForOdf, setSelectedPatientForOdf] = useState(null);
 
   const normRole = normalizeRole(currentUser?.role);
   const allowUploadODF = canUploadODF(normRole);
-
-  // New Patient Form State
-  const [newPatient, setNewPatient] = useState({
-    id: to8DigitId(patients.length + 1),
-    name: "",
-    email: "",
-    phone: "",
-    clinician: DEFAULT_CLINICIAN,
-    procedure: "Dental Examination & Charting",
-    notes: "",
-  });
-
-  const [selectedPatientForOdf, setSelectedPatientForOdf] = useState(null);
 
   // Filter records according to user role specifications:
   // 1. Patient: View ONLY their own record
@@ -45,7 +31,6 @@ export default function PatientRecord({
   // 3. Faculty & Admin: Unrestricted view of all patient records
   const roleFilteredPatients = patients.filter((p) => {
     if (normRole === "patient") {
-      // Show only current patient
       const userEmail = (currentUser?.email || "").toLowerCase();
       const patientEmail = (p.email || "").toLowerCase();
       return (
@@ -55,7 +40,6 @@ export default function PatientRecord({
       );
     }
     if (normRole === "student_clinician") {
-      // Student Clinicians view attended patients & own records
       const isAttended =
         p.clinician?.toLowerCase().includes("student clinician") ||
         p.clinician?.toLowerCase().includes("doe, jane") ||
@@ -63,7 +47,6 @@ export default function PatientRecord({
         p.clinician?.toLowerCase().includes((currentUser?.email || "").toLowerCase());
       return isAttended;
     }
-    // Faculty & Admin: All patient records
     return true;
   });
 
@@ -73,29 +56,6 @@ export default function PatientRecord({
   });
 
   const blanks = Math.max(0, ROWS - filtered.length);
-
-  const handleCreatePatient = (e) => {
-    e.preventDefault();
-    if (!newPatient.name.trim()) return;
-    const clean8DigitId = to8DigitId(newPatient.id || patients.length + 1);
-    onAddPatient({
-      ...newPatient,
-      id: clean8DigitId,
-      eightDigitId: clean8DigitId,
-      clinician: newPatient.clinician || DEFAULT_CLINICIAN,
-      lastVisit: new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-    });
-    setShowAddModal(false);
-    setNewPatient({
-      id: to8DigitId(patients.length + 2),
-      name: "",
-      email: "",
-      phone: "",
-      clinician: DEFAULT_CLINICIAN,
-      procedure: "Dental Examination & Charting",
-      notes: "",
-    });
-  };
 
   const openOdfForPatient = (patient) => {
     setSelectedPatientForOdf(patient);
@@ -125,7 +85,7 @@ export default function PatientRecord({
             gap: "10px",
           }}
         >
-          <span>🔒 <strong>Patient View Active:</strong> Showing your personal dental health record.</span>
+          <span>🔒 <strong>Patient Portal View:</strong> Viewing your personal clinical records & consultation history.</span>
         </div>
       )}
 
@@ -146,7 +106,7 @@ export default function PatientRecord({
             gap: "8px",
           }}
         >
-          <span>📋 <strong>Student Clinician Workspace:</strong> Viewing your attended patient cases. You can upload new Oral Diagnosis Forms (ODF) for faculty sign-off.</span>
+          <span>📋 <strong>Student Clinician Workspace:</strong> Viewing your attended patient cases. Click <strong>View Records</strong> to inspect consultation histories, or <strong>+ Upload ODF</strong> to submit new clinical findings.</span>
         </div>
       )}
 
@@ -175,29 +135,17 @@ export default function PatientRecord({
             />
           </div>
 
-          <button className="pill" type="button">
-            Filter by
+          <button className="pill" type="button" onClick={() => setQuery("")}>
+            {query ? "Clear Search" : "All Patients"}
           </button>
 
-          {/* Dynamic Action Buttons according to specifications:
-              Upload ODF button is rendered ONLY for student_clinician and faculty (and admin) */}
+          {/* Dynamic Action Button: Upload ODF */}
           {allowUploadODF && (
             <button
               className="pill pill--primary"
               type="button"
               onClick={() => {
                 setSelectedPatientForOdf(null);
-                setOdfForm({
-                  patientId: to8DigitId(Date.now().toString().slice(-8)),
-                  patientName: "",
-                  attendingClinician: DEFAULT_CLINICIAN,
-                  chiefComplaint: "Routine oral diagnosis & restorative evaluation",
-                  toothNumber: "#19 (Lower Left First Molar)",
-                  diagnosis: "Class II Occlusal-Distal Dental Caries",
-                  treatmentPlan: "Direct composite restoration & topical fluoride",
-                  radiographNotes: "Bitewing radiograph shows radiolucency confined to enamel and dentin border.",
-                  fileAttachment: "Panorex_2026_ODF.pdf",
-                });
                 setShowOdfModal(true);
               }}
               style={{
@@ -206,16 +154,6 @@ export default function PatientRecord({
               }}
             >
               + Upload ODF
-            </button>
-          )}
-
-          {normRole !== "patient" && (
-            <button
-              className="pill pill--primary"
-              type="button"
-              onClick={() => setShowAddModal(true)}
-            >
-              + Add Patient
             </button>
           )}
         </div>
@@ -267,11 +205,21 @@ export default function PatientRecord({
                         onClick={() => openOdfForPatient(p)}
                         title="Upload Oral Diagnosis Form for this patient"
                       >
-                        Upload ODF
+                        + ODF
                       </button>
                     )}
-                    <button className="table__action" onClick={() => onViewRecords(p)}>
-                      View Records
+                    <button
+                      className="table__action"
+                      style={{
+                        background: "linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%)",
+                        borderColor: "#fbcfe8",
+                        color: "#db2777",
+                        fontWeight: "700",
+                      }}
+                      onClick={() => onViewRecords(p)}
+                      title="Open full history of consultation & treatment records"
+                    >
+                      View Records →
                     </button>
                   </td>
                 </tr>
@@ -319,222 +267,6 @@ export default function PatientRecord({
             setSelectedPatientForOdf(null);
           }}
         />
-      )}
-
-      {/* Add Patient Modal */}
-      {showAddModal && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "rgba(15, 23, 42, 0.55)",
-            backdropFilter: "blur(4px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "16px",
-          }}
-          onClick={() => setShowAddModal(false)}
-        >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: "460px",
-              background: "#ffffff",
-              borderRadius: "24px",
-              boxShadow: "0 24px 48px -12px rgba(0, 0, 0, 0.2)",
-              overflow: "hidden",
-              border: "1px solid #e2e8f0",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                background: "linear-gradient(135deg, #e91e77 0%, #f02a80 100%)",
-                padding: "24px",
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "10px",
-                    background: "rgba(255, 255, 255, 0.2)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2">
-                    <rect x="3" y="7" width="18" height="13" rx="2" />
-                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="12" y1="11" x2="12" y2="15" />
-                    <line x1="10" y1="13" x2="14" y2="13" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800" }}>
-                    Add Patient Record
-                  </h3>
-                  <p style={{ margin: 0, fontSize: "11px", opacity: 0.9 }}>
-                    8-Digit Clinical Patient Management
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowAddModal(false)}
-                style={{
-                  background: "rgba(255, 255, 255, 0.2)",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: "30px",
-                  height: "30px",
-                  color: "#fff",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleCreatePatient} style={{ padding: "22px 24px" }}>
-              <div style={{ display: "grid", gap: "14px", marginBottom: "20px" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: "10px" }}>
-                  <div>
-                    <label style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#334155", textTransform: "uppercase", marginBottom: "6px" }}>
-                      Patient ID (8 Digits) *
-                    </label>
-                    <input
-                      style={{
-                        width: "100%",
-                        height: "44px",
-                        padding: "0 12px",
-                        background: "#f8fafc",
-                        border: "1.5px solid #cbd5e1",
-                        borderRadius: "12px",
-                        fontSize: "13px",
-                        fontFamily: "monospace",
-                        fontWeight: "700",
-                        color: "#0f172a",
-                      }}
-                      value={newPatient.id}
-                      onChange={(e) => setNewPatient({ ...newPatient, id: e.target.value.replace(/\D/g, "").slice(0, 8) })}
-                      maxLength={8}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#334155", textTransform: "uppercase", marginBottom: "6px" }}>
-                      Patient Full Name *
-                    </label>
-                    <input
-                      style={{
-                        width: "100%",
-                        height: "44px",
-                        padding: "0 14px",
-                        background: "#f8fafc",
-                        border: "1.5px solid #cbd5e1",
-                        borderRadius: "12px",
-                        fontSize: "13.5px",
-                        color: "#0f172a",
-                      }}
-                      placeholder="e.g. Eleanor Vance"
-                      value={newPatient.name}
-                      onChange={(e) => setNewPatient({ ...newPatient, name: e.target.value })}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#334155", textTransform: "uppercase", marginBottom: "6px" }}>
-                    Attending Clinician (Placeholder)
-                  </label>
-                  <input
-                    style={{
-                      width: "100%",
-                      height: "44px",
-                      padding: "0 14px",
-                      background: "#f8fafc",
-                      border: "1.5px solid #cbd5e1",
-                      borderRadius: "12px",
-                      fontSize: "13.5px",
-                      color: "#0f172a",
-                    }}
-                    value={newPatient.clinician}
-                    onChange={(e) => setNewPatient({ ...newPatient, clinician: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <label style={{ display: "block", fontSize: "11px", fontWeight: "700", color: "#334155", textTransform: "uppercase", marginBottom: "6px" }}>
-                    Procedure / Reason for Visit
-                  </label>
-                  <input
-                    style={{
-                      width: "100%",
-                      height: "44px",
-                      padding: "0 14px",
-                      background: "#f8fafc",
-                      border: "1.5px solid #cbd5e1",
-                      borderRadius: "12px",
-                      fontSize: "13.5px",
-                      color: "#0f172a",
-                    }}
-                    value={newPatient.procedure}
-                    onChange={(e) => setNewPatient({ ...newPatient, procedure: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  style={{
-                    background: "#f1f5f9",
-                    color: "#475569",
-                    border: "none",
-                    padding: "10px 18px",
-                    borderRadius: "12px",
-                    fontSize: "13px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  style={{
-                    background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
-                    color: "#ffffff",
-                    border: "none",
-                    padding: "10px 22px",
-                    borderRadius: "12px",
-                    fontWeight: "700",
-                    fontSize: "13px",
-                    cursor: "pointer",
-                    boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
-                  }}
-                >
-                  Save Patient Record
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
       )}
     </Layout>
   );

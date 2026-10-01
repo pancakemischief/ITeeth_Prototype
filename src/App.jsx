@@ -4,6 +4,8 @@ import Login from "./components/Login";
 import PatientRecord from "./components/PatientRecord";
 import PendingApproval from "./components/PendingApproval";
 import Settings from "./components/Settings";
+import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
+import DigitalOdfForm from "./components/DigitalOdfForm";
 import {
   fetchPatientsFromSupabase,
   fetchPendingFromSupabase,
@@ -13,20 +15,9 @@ import {
   declinePendingInSupabase,
   to8DigitId,
   DEFAULT_CLINICIAN,
+  getLocalPatients,
+  getLocalPending,
 } from "./lib/dentalService";
-
-// Strictly 8-Digit Patient IDs and Dr. Jane Doe, MD as Attending Clinician
-const DEFAULT_PATIENTS = [
-  { id: "10000001", eightDigitId: "10000001", name: "John Doe", lastVisit: "01/01/2026", clinician: DEFAULT_CLINICIAN, procedure: "Biannual Prophylaxis & Bitewing X-Rays" },
-  { id: "10000002", eightDigitId: "10000002", name: "Sarah Connor", lastVisit: "02/14/2026", clinician: DEFAULT_CLINICIAN, procedure: "Endodontic Therapy #14" },
-  { id: "10000003", eightDigitId: "10000003", name: "Marcus Wright", lastVisit: "03/10/2026", clinician: DEFAULT_CLINICIAN, procedure: "Composite Restoration #30 MOD" },
-  { id: "10000004", eightDigitId: "10000004", name: "Kyle Reese", lastVisit: "03/18/2026", clinician: DEFAULT_CLINICIAN, procedure: "Gingival Scaling & Root Planing" },
-];
-
-const DEFAULT_PENDING = [
-  { id: "10000005", name: "Grace Brewster", visitDate: "03/22/2026", clinician: DEFAULT_CLINICIAN, procedure: "Composite Restoration Tooth #19", notes: "Class II resin restoration required. Supervising faculty sign-off requested." },
-  { id: "10000006", name: "Arthur Dent", visitDate: "03/24/2026", clinician: DEFAULT_CLINICIAN, procedure: "Panoramic Radiograph Evaluation", notes: "Full mouth series review for third molar impaction." },
-];
 
 function AppRoutes() {
   const navigate = useNavigate();
@@ -41,9 +32,11 @@ function AppRoutes() {
     }
   });
 
-  const [patients, setPatients] = useState(DEFAULT_PATIENTS);
-  const [pending, setPending] = useState(DEFAULT_PENDING);
-  const [activeModal, setActiveModal] = useState(null); // { type: 'view' | 'review', item: ... }
+  const [patients, setPatients] = useState(() => getLocalPatients());
+  const [pending, setPending] = useState(() => getLocalPending());
+  const [historyPatient, setHistoryPatient] = useState(null); // patient object to inspect records
+  const [odfModalTarget, setOdfModalTarget] = useState(null); // patient object to open ODF for
+  const [activeReviewModal, setActiveReviewModal] = useState(null); // pending item to review
   const [notification, setNotification] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -51,7 +44,7 @@ function AppRoutes() {
     setNotification(message);
     setTimeout(() => {
       setNotification((current) => (current === message ? null : current));
-    }, 4000);
+    }, 4500);
   };
 
   // Load from Supabase on mount
@@ -64,10 +57,10 @@ function AppRoutes() {
           fetchPendingFromSupabase(),
         ]);
         if (!active) return;
-        if (patientsRes.success && patientsRes.data && patientsRes.data.length > 0) {
+        if (patientsRes.data && patientsRes.data.length > 0) {
           setPatients(patientsRes.data);
         }
-        if (pendingRes.success && pendingRes.data && pendingRes.data.length > 0) {
+        if (pendingRes.data && pendingRes.data.length > 0) {
           setPending(pendingRes.data);
         }
       } catch (err) {
@@ -88,21 +81,23 @@ function AppRoutes() {
       ]);
 
       let loadedCount = 0;
-      if (patientsRes.success && patientsRes.data && patientsRes.data.length > 0) {
+      if (patientsRes.data && patientsRes.data.length > 0) {
         setPatients(patientsRes.data);
         loadedCount += patientsRes.data.length;
       }
 
-      if (pendingRes.success && pendingRes.data && pendingRes.data.length > 0) {
+      if (pendingRes.data && pendingRes.data.length > 0) {
         setPending(pendingRes.data);
         loadedCount += pendingRes.data.length;
       }
 
       if (showNotice) {
-        if (loadedCount > 0) {
-          showToast(`✓ Loaded ${loadedCount} records from Supabase`);
+        if (patientsRes.success && loadedCount > 0) {
+          showToast(`✓ Synchronized ${loadedCount} patient records with Supabase`);
         } else if (!patientsRes.success) {
-          showToast("⚡ Supabase ready. Create tables in Supabase SQL editor to persist records.");
+          showToast(`⚡ Using cached records (${patientsRes.error || "Supabase RLS active"})`);
+        } else {
+          showToast(`✓ Synced with Supabase (${loadedCount} records)`);
         }
       }
     } catch (err) {
@@ -155,53 +150,59 @@ function AppRoutes() {
     else navigate(`/${key}`);
   };
 
+  // Open rich history records modal
   const handleViewRecords = (patient) => {
-    setActiveModal({ type: "view", item: patient });
+    setHistoryPatient(patient);
   };
 
+  // Open review modal for pending item
   const handleReview = (pendingItem) => {
-    setActiveModal({ type: "review", item: pendingItem });
-  };
-
-  // Write new patient to Supabase
-  const handleAddPatient = async (newPatient) => {
-    const formatted = {
-      ...newPatient,
-      id: to8DigitId(newPatient.id),
-      clinician: newPatient.clinician || DEFAULT_CLINICIAN,
-    };
-    setPatients((prev) => [formatted, ...prev.filter((p) => p.id !== formatted.id)]);
-    showToast(`Saving patient #${formatted.id} (${formatted.name}) to Supabase...`);
-
-    const res = await savePatientToSupabase(formatted);
-    if (res.success && res.data) {
-      setPatients((prev) => [
-        res.data,
-        ...prev.filter((p) => p.id !== formatted.id && p.id !== res.data.id),
-      ]);
-      showToast(`✓ Patient #${formatted.id} saved to Supabase!`);
-    } else if (res.success) {
-      showToast(`✓ Patient #${formatted.id} saved to Supabase!`);
-    } else {
-      showToast(`Saved locally (${res.error || "Supabase offline"})`);
-    }
+    setActiveReviewModal(pendingItem);
   };
 
   // Submit Oral Diagnosis Form (ODF) or pending approval
   const handleUploadODF = async (odfItem) => {
-    const formatted = {
+    const formattedId = to8DigitId(odfItem.id || odfItem.eightDigitId);
+    const formattedPending = {
       ...odfItem,
-      id: to8DigitId(odfItem.id),
+      id: formattedId,
+      eightDigitId: formattedId,
       clinician: odfItem.clinician || DEFAULT_CLINICIAN,
     };
-    setPending((prev) => [formatted, ...prev.filter((p) => p.id !== formatted.id)]);
-    showToast(`Submitting ODF for Patient #${formatted.id} to Supabase...`);
 
-    const res = await savePendingToSupabase(formatted);
+    // 1. Immediately update pending state
+    setPending((prev) => [formattedPending, ...prev.filter((p) => to8DigitId(p.id) !== formattedId)]);
+
+    // 2. Also ensure patient appears in the patients table
+    const patientEntry = {
+      id: formattedId,
+      eightDigitId: formattedId,
+      name: formattedPending.name || "Patient #" + formattedId,
+      lastVisit: formattedPending.visitDate || new Date().toLocaleDateString("en-US"),
+      clinician: formattedPending.clinician,
+      procedure: formattedPending.procedure || "Oral Diagnosis Form (ODF)",
+      notes: formattedPending.notes || "",
+      phone: odfItem.odfDetails?.cellPhone || odfItem.cellPhone || "",
+      email: odfItem.odfDetails?.email || odfItem.email || "",
+      gender: odfItem.odfDetails?.sex || odfItem.sex || "Male",
+      dateOfBirth: odfItem.odfDetails?.birthDate || odfItem.birthDate || "",
+      age: odfItem.odfDetails?.age || odfItem.age || "",
+      homeAddress: odfItem.odfDetails?.homeAddress || odfItem.homeAddress || "",
+      odfData: odfItem.odfDetails || odfItem,
+    };
+
+    setPatients((prev) => [
+      patientEntry,
+      ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
+    ]);
+
+    showToast(`Submitting ODF for Patient #${formattedId} (${patientEntry.name}) to Supabase...`);
+
+    const res = await savePendingToSupabase(formattedPending);
     if (res.success) {
-      showToast(`✓ ODF for Patient #${formatted.id} submitted for faculty review!`);
+      showToast(`✓ ODF #${formattedId} saved & synced to Supabase database!`);
     } else {
-      showToast(`Saved locally (${res.error || "Supabase offline"})`);
+      showToast(`✓ ODF #${formattedId} saved locally (${res.error || "persisted in local cache"})`);
     }
   };
 
@@ -209,6 +210,7 @@ function AppRoutes() {
   const handleApprove = async (item) => {
     const formattedId = to8DigitId(item.id);
     setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
+
     const approvedPatient = {
       id: formattedId,
       eightDigitId: formattedId,
@@ -217,12 +219,14 @@ function AppRoutes() {
       clinician: item.clinician || DEFAULT_CLINICIAN,
       procedure: item.procedure,
       notes: item.notes,
+      odfData: item.odfDetails || null,
     };
+
     setPatients((prev) => [
       approvedPatient,
       ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
     ]);
-    setActiveModal(null);
+    setActiveReviewModal(null);
     showToast(`✓ Approved #${formattedId} (${item.name}). Syncing with Supabase...`);
 
     const res = await approvePendingInSupabase(item);
@@ -235,7 +239,7 @@ function AppRoutes() {
       }
       showToast(`✓ Successfully approved & synced #${formattedId} in Supabase!`);
     } else {
-      showToast(`✓ Approved locally (Supabase: ${res.error || "offline"})`);
+      showToast(`✓ Approved & saved to patient history (${res.error || "persisted locally"})`);
     }
   };
 
@@ -243,14 +247,14 @@ function AppRoutes() {
   const handleDecline = async (item) => {
     const formattedId = to8DigitId(item.id);
     setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
-    setActiveModal(null);
+    setActiveReviewModal(null);
     showToast(`Declining #${formattedId} (${item.name})...`);
 
     const res = await declinePendingInSupabase(item);
     if (res.success) {
       showToast(`✕ Declined request for #${formattedId} in Supabase.`);
     } else {
-      showToast(`✕ Declined request locally.`);
+      showToast(`✕ Declined request.`);
     }
   };
 
@@ -271,9 +275,9 @@ function AppRoutes() {
     }
 
     if (savedPatients > 0 || savedPending > 0) {
-      showToast(`✓ Seeded ${savedPatients} patients and ${savedPending} pending requests to Supabase!`);
+      showToast(`✓ Seeded ${savedPatients} patients and ${savedPending} pending requests!`);
     } else {
-      showToast("⚡ Tables not found in Supabase. Copy SQL schema in Settings and run in Supabase SQL editor!");
+      showToast("⚡ Tables protected by RLS. Apply RLS script from Settings in Supabase SQL editor.");
     }
   };
 
@@ -294,15 +298,15 @@ function AppRoutes() {
             zIndex: 9999,
             background: "#0f172a",
             color: "#ffffff",
-            padding: "10px 18px",
+            padding: "11px 18px",
             borderRadius: "12px",
-            fontSize: "12.5px",
+            fontSize: "13px",
             fontWeight: 600,
-            boxShadow: "0 10px 25px -5px rgba(0,0,0,0.3)",
+            boxShadow: "0 10px 25px -5px rgba(0,0,0,0.35)",
             display: "flex",
             alignItems: "center",
             gap: "8px",
-            border: "1px solid rgba(255,255,255,0.1)",
+            border: "1px solid rgba(255,255,255,0.15)",
           }}
         >
           {notification}
@@ -319,7 +323,6 @@ function AppRoutes() {
               patients={patients}
               onNavigate={handleNavigate}
               onViewRecords={handleViewRecords}
-              onAddPatient={handleAddPatient}
               onUploadODF={handleUploadODF}
               isSyncing={isSyncing}
               currentUser={currentUser}
@@ -359,8 +362,50 @@ function AppRoutes() {
         <Route path="*" element={<Navigate to="/patients" replace />} />
       </Routes>
 
-      {/* Detail / Review Modal with 8-Digit ID and Dr. Jane Doe, MD */}
-      {activeModal && (
+      {/* Patient Record History Modal: List of clickable historical records */}
+      {historyPatient && (
+        <PatientRecordsHistoryModal
+          patient={historyPatient}
+          onClose={() => setHistoryPatient(null)}
+          onOpenOdf={(p) => {
+            setHistoryPatient(null);
+            setOdfModalTarget(p);
+          }}
+          currentUser={currentUser}
+        />
+      )}
+
+      {/* Digital ODF Modal opened directly from History Modal or action */}
+      {odfModalTarget && (
+        <DigitalOdfForm
+          patientId={to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId)}
+          initialData={{
+            eightDigitId: to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId),
+            name: odfModalTarget.name || "",
+            cellPhone: odfModalTarget.phone || "",
+            homeAddress: odfModalTarget.homeAddress || "",
+            historyOfPresentIllness: odfModalTarget.notes || "",
+            chiefComplaints: [odfModalTarget.procedure || "", "", "", ""],
+            tentativeDiagnosis: [odfModalTarget.procedure || "", "", "", "", "", ""],
+            recommendedTreatmentPlan: ["", "", "", "", "", ""],
+            medicalConditions: [],
+            diagnosticTests: [],
+            sex: odfModalTarget.gender || "Male",
+            age: odfModalTarget.age || "",
+            birthDate: odfModalTarget.dateOfBirth || "",
+            clinician: odfModalTarget.clinician || DEFAULT_CLINICIAN,
+          }}
+          currentUser={currentUser}
+          onCancel={() => setOdfModalTarget(null)}
+          onSave={(odfData) => {
+            handleUploadODF(odfData);
+            setOdfModalTarget(null);
+          }}
+        />
+      )}
+
+      {/* Faculty Review Modal for Pending Approvals */}
+      {activeReviewModal && (
         <div
           style={{
             position: "fixed",
@@ -373,12 +418,12 @@ function AppRoutes() {
             justifyContent: "center",
             padding: "16px",
           }}
-          onClick={() => setActiveModal(null)}
+          onClick={() => setActiveReviewModal(null)}
         >
           <div
             style={{
               width: "100%",
-              maxWidth: "480px",
+              maxWidth: "520px",
               background: "#ffffff",
               borderRadius: "24px",
               boxShadow: "0 24px 48px -12px rgba(0, 0, 0, 0.25)",
@@ -390,7 +435,7 @@ function AppRoutes() {
             <div
               style={{
                 background: "linear-gradient(135deg, #e91e77 0%, #f02a80 100%)",
-                padding: "24px",
+                padding: "22px 24px",
                 color: "#ffffff",
                 display: "flex",
                 alignItems: "center",
@@ -398,37 +443,20 @@ function AppRoutes() {
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "10px",
-                    background: "rgba(255, 255, 255, 0.2)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.2">
-                    <rect x="3" y="7" width="18" height="13" rx="2" />
-                    <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    <line x1="12" y1="11" x2="12" y2="15" />
-                    <line x1="10" y1="13" x2="14" y2="13" />
-                  </svg>
-                </div>
+                <span style={{ fontSize: "20px" }}>📋</span>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800" }}>
-                    {activeModal.type === "view" ? "Clinical Patient Record" : "Review Oral Diagnosis Form (ODF)"}
+                    Review Oral Diagnosis Form (ODF)
                   </h3>
                   <p style={{ margin: 0, fontSize: "11px", opacity: 0.9 }}>
-                    Escolar Dental Records System
+                    Supervising Faculty Sign-Off Gate
                   </p>
                 </div>
               </div>
 
               <button
                 type="button"
-                onClick={() => setActiveModal(null)}
+                onClick={() => setActiveReviewModal(null)}
                 style={{
                   background: "rgba(255, 255, 255, 0.2)",
                   border: "none",
@@ -439,8 +467,6 @@ function AppRoutes() {
                   fontSize: "14px",
                   fontWeight: "700",
                   cursor: "pointer",
-                  display: "grid",
-                  placeItems: "center",
                 }}
               >
                 ✕
@@ -461,101 +487,78 @@ function AppRoutes() {
                 }}
               >
                 <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Patient ID (8 Digits):</strong>{" "}
+                  <strong style={{ color: "#475569" }}>Patient ID:</strong>{" "}
                   <code style={{ background: "#fff", padding: "2px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", color: "#0f172a" }}>
-                    {to8DigitId(activeModal.item.id)}
+                    {to8DigitId(activeReviewModal.id)}
                   </code>
                 </p>
                 <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Patient Name:</strong> {activeModal.item.name}
-                </p>
-                {activeModal.item.email && (
-                  <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Email:</strong> {activeModal.item.email}
-                  </p>
-                )}
-                {activeModal.item.phone && (
-                  <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Phone:</strong> {activeModal.item.phone}
-                  </p>
-                )}
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>
-                    {activeModal.type === "view" ? "Last Visit:" : "Visit Date:"}
-                  </strong>{" "}
-                  {activeModal.item.lastVisit || activeModal.item.visitDate}
+                  <strong style={{ color: "#475569" }}>Patient Name:</strong> {activeReviewModal.name}
                 </p>
                 <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeModal.item.clinician || DEFAULT_CLINICIAN}
+                  <strong style={{ color: "#475569" }}>Visit Date:</strong> {activeReviewModal.visitDate}
                 </p>
-                {activeModal.item.procedure && (
+                <p style={{ margin: "3px 0" }}>
+                  <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeReviewModal.clinician || DEFAULT_CLINICIAN}
+                </p>
+                <p style={{ margin: "3px 0" }}>
+                  <strong style={{ color: "#475569" }}>Proposed Procedure:</strong> {activeReviewModal.procedure}
+                </p>
+                {activeReviewModal.notes && (
                   <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Procedure / Diagnosis:</strong> {activeModal.item.procedure}
+                    <strong style={{ color: "#475569" }}>Clinical Notes:</strong> {activeReviewModal.notes}
                   </p>
                 )}
-                {activeModal.item.notes && (
-                  <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Clinical Findings:</strong> {activeModal.item.notes}
-                  </p>
+
+                {/* Show thumbnail if Odontogram crop exists */}
+                {(activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl) && (
+                  <div style={{ marginTop: "10px", textAlign: "center" }}>
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#e91e77", display: "block", marginBottom: "4px" }}>
+                      Attached Odontogram Scan:
+                    </span>
+                    <img
+                      src={activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl}
+                      alt="Odontogram preview"
+                      style={{ maxHeight: "140px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                    />
+                  </div>
                 )}
               </div>
 
               <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                {activeModal.type === "review" ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => handleDecline(activeModal.item)}
-                      style={{
-                        background: "#fef2f2",
-                        color: "#dc2626",
-                        border: "1.5px solid #fecaca",
-                        padding: "9px 18px",
-                        borderRadius: "12px",
-                        fontWeight: "700",
-                        cursor: "pointer",
-                        fontSize: "13px",
-                      }}
-                    >
-                      Decline Request
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleApprove(activeModal.item)}
-                      style={{
-                        background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
-                        color: "#ffffff",
-                        border: "none",
-                        padding: "9px 20px",
-                        borderRadius: "12px",
-                        fontWeight: "700",
-                        cursor: "pointer",
-                        fontSize: "13px",
-                        boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
-                      }}
-                    >
-                      Faculty Approve
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setActiveModal(null)}
-                    style={{
-                      background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "9px 22px",
-                      borderRadius: "12px",
-                      fontWeight: "700",
-                      cursor: "pointer",
-                      fontSize: "13px",
-                      boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
-                    }}
-                  >
-                    Done
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => handleDecline(activeReviewModal)}
+                  style={{
+                    background: "#fef2f2",
+                    color: "#dc2626",
+                    border: "1.5px solid #fecaca",
+                    padding: "9px 18px",
+                    borderRadius: "12px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                >
+                  Decline Request
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApprove(activeReviewModal)}
+                  style={{
+                    background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
+                    color: "#ffffff",
+                    border: "none",
+                    padding: "9px 20px",
+                    borderRadius: "12px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    fontSize: "13px",
+                    boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
+                  }}
+                >
+                  Faculty Approve
+                </button>
               </div>
             </div>
           </div>
