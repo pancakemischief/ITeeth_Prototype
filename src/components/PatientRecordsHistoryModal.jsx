@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { to8DigitId, DEFAULT_CLINICIAN, fetchPatientHistoryRecords } from "../lib/dentalService";
+import { to8DigitId, DEFAULT_CLINICIAN, fetchPatientHistoryRecords, updateRecordDocumentScan } from "../lib/dentalService";
+import DocumentViewerModal from "./DocumentViewerModal";
 
 export default function PatientRecordsHistoryModal({
   patient,
@@ -8,6 +9,7 @@ export default function PatientRecordsHistoryModal({
   _currentUser,
 }) {
   const [selectedRecord, setSelectedRecord] = useState(null);
+  const [viewingDocument, setViewingDocument] = useState(null);
   const [filterType, setFilterType] = useState("all"); // 'all' | 'odf' | 'treatment' | 'appointment'
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -123,6 +125,26 @@ export default function PatientRecordsHistoryModal({
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <button
               type="button"
+              onClick={() => setViewingDocument({ patientId: eightDigitId, ...patient })}
+              style={{
+                background: "rgba(255, 255, 255, 0.2)",
+                color: "#ffffff",
+                border: "1px solid rgba(255, 255, 255, 0.35)",
+                borderRadius: "10px",
+                padding: "8px 14px",
+                fontSize: "12.5px",
+                fontWeight: "700",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+              }}
+              title="Inspect actual uploaded or official scanned CEU Oral Diagnosis Form"
+            >
+              <span>📄 View Scanned Document</span>
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 onClose();
                 onOpenOdf(patient);
@@ -227,6 +249,26 @@ export default function PatientRecordsHistoryModal({
                 </button>
 
                 <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    onClick={() => setViewingDocument(selectedRecord)}
+                    style={{
+                      background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
+                      color: "#ffffff",
+                      border: "none",
+                      borderRadius: "8px",
+                      padding: "6px 12px",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "5px",
+                      boxShadow: "0 2px 8px rgba(233, 30, 119, 0.3)",
+                    }}
+                  >
+                    <span>📄 View Scanned Document</span>
+                  </button>
                   <span
                     style={{
                       background:
@@ -255,6 +297,70 @@ export default function PatientRecordsHistoryModal({
                     Encounter Date: {selectedRecord.date}
                   </span>
                 </div>
+              </div>
+
+              {/* Scanned Document Hero Card */}
+              <div
+                style={{
+                  background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
+                  borderRadius: "16px",
+                  padding: "16px 20px",
+                  marginBottom: "18px",
+                  color: "#ffffff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  flexWrap: "wrap",
+                  gap: "14px",
+                  boxShadow: "0 10px 25px -5px rgba(15, 23, 42, 0.3)",
+                  border: "1px solid #334155",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                  <div
+                    style={{
+                      width: "44px",
+                      height: "44px",
+                      borderRadius: "12px",
+                      background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
+                      display: "grid",
+                      placeItems: "center",
+                      fontSize: "20px",
+                      boxShadow: "0 4px 12px rgba(233, 30, 119, 0.35)",
+                    }}
+                  >
+                    📄
+                  </div>
+                  <div>
+                    <h4 style={{ margin: "0 0 3px", fontSize: "14.5px", fontWeight: "800", color: "#ffffff" }}>
+                      Official Scanned CEU Oral Diagnosis Form & Records
+                    </h4>
+                    <p style={{ margin: 0, fontSize: "12px", color: "#94a3b8" }}>
+                      Inspect complete 2-page document: Odontogram chart, Diagnostic Tests, Treatment Plan & Signed Consent.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setViewingDocument(selectedRecord)}
+                  style={{
+                    background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "10px",
+                    padding: "9px 18px",
+                    fontSize: "13px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "7px",
+                    boxShadow: "0 4px 14px rgba(233, 30, 119, 0.4)",
+                  }}
+                >
+                  <span>🔍 Open Full Scanned Document</span>
+                </button>
               </div>
 
               {/* Record Summary Box */}
@@ -595,20 +701,55 @@ export default function PatientRecordsHistoryModal({
                           </div>
                         </div>
 
-                        {/* Right Action Arrow */}
+                        {/* Right Actions: View Document & Open Record */}
                         <div
                           style={{
                             display: "flex",
                             alignItems: "center",
-                            gap: "4px",
-                            color: "#e91e77",
-                            fontSize: "12px",
-                            fontWeight: "700",
-                            whiteSpace: "nowrap",
+                            gap: "8px",
+                            flexWrap: "nowrap",
                           }}
                         >
-                          <span>Open Record</span>
-                          <span style={{ fontSize: "16px" }}>→</span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setViewingDocument(rec);
+                            }}
+                            style={{
+                              background: "#ffffff",
+                              border: "1.5px solid #e91e77",
+                              color: "#e91e77",
+                              padding: "6px 12px",
+                              borderRadius: "8px",
+                              fontSize: "12px",
+                              fontWeight: "700",
+                              cursor: "pointer",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "5px",
+                              boxShadow: "0 2px 6px rgba(233, 30, 119, 0.12)",
+                              whiteSpace: "nowrap",
+                            }}
+                            title="Inspect full scanned CEU Oral Diagnosis Form document"
+                          >
+                            <span>📄 View Document</span>
+                          </button>
+
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              color: "#475569",
+                              fontSize: "12px",
+                              fontWeight: "700",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <span>Details</span>
+                            <span style={{ fontSize: "16px" }}>→</span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -652,6 +793,20 @@ export default function PatientRecordsHistoryModal({
           </button>
         </div>
       </div>
+
+      {/* Scanned Document Viewer Modal */}
+      {viewingDocument && (
+        <DocumentViewerModal
+          record={viewingDocument}
+          patient={patient}
+          onClose={() => setViewingDocument(null)}
+          onSaveDocumentScan={async (scanData) => {
+            await updateRecordDocumentScan(scanData);
+            const updated = await fetchPatientHistoryRecords(patient);
+            setRecords(updated);
+          }}
+        />
+      )}
     </div>
   );
 }

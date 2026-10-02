@@ -37,6 +37,11 @@ export function canApproveODF(role) {
   return norm === "faculty" || norm === "admin";
 }
 
+export function isStudentClinician(role) {
+  const norm = normalizeRole(role);
+  return norm === "student_clinician";
+}
+
 export function canAccessDeveloperOptions(role) {
   const norm = normalizeRole(role);
   return norm === "admin";

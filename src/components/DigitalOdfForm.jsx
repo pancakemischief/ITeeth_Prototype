@@ -166,10 +166,13 @@ export default function DigitalOdfForm({
     if (!file) return;
 
     setIsProcessingOcr(true);
-    setOcrStatus("Cropping Section C (Odontogram) from Page 1 scan...");
+    setOcrStatus("Preserving full Page 1 document scan & cropping Odontogram...");
 
     try {
-      // 1. Precise Region Cropping via HTML5 Canvas
+      // 1. Upload Full Page 1 Document Scan
+      const rawPage1Url = await uploadOdfImageToStorage(file, `page1_full_${form.eightDigitId}.jpg`);
+
+      // 2. Precise Region Cropping via HTML5 Canvas
       const odontoCrop = await cropImageRegion(file, ODF_CROP_PRESETS.PAGE_1_ODONTOGRAM);
       
       // Upload to Supabase Storage (with fallback to dataUrl)
@@ -177,10 +180,12 @@ export default function DigitalOdfForm({
 
       setForm((prev) => ({
         ...prev,
+        rawScanUrl: rawPage1Url,
+        page1ScanUrl: rawPage1Url,
         odontogramCropUrl: odontoUrl || odontoCrop.dataUrl,
       }));
 
-      // 2. Optical Character Recognition on Top Half (Demographics & Case History)
+      // 3. Optical Character Recognition on Top Half (Demographics & Case History)
       setOcrStatus("Extracting patient demographic text via Tesseract OCR...");
       try {
         const result = await Tesseract.recognize(file, "eng", {
@@ -207,7 +212,7 @@ export default function DigitalOdfForm({
         console.warn("OCR non-critical error:", ocrErr);
       }
 
-      setOcrStatus("✓ Page 1 processed! Odontogram cleanly cropped and text pre-filled.");
+      setOcrStatus("✓ Page 1 document preserved! Odontogram cropped and demographics pre-filled.");
     } catch (err) {
       console.error("Page 1 processing error:", err);
       setOcrStatus("Error processing Page 1 scan.");
@@ -222,19 +227,24 @@ export default function DigitalOdfForm({
     if (!file) return;
 
     setIsProcessingOcr(true);
-    setOcrStatus("Cropping Signed Consent & Data Privacy Policy section from Page 2...");
+    setOcrStatus("Preserving full Page 2 scan & cropping Signed Consent section...");
 
     try {
-      // Precise Region Cropping via HTML5 Canvas
+      // 1. Upload Full Page 2 Document Scan
+      const rawPage2Url = await uploadOdfImageToStorage(file, `page2_full_${form.eightDigitId}.jpg`);
+
+      // 2. Precise Region Cropping via HTML5 Canvas
       const consentCrop = await cropImageRegion(file, ODF_CROP_PRESETS.PAGE_2_CONSENT);
       const consentUrl = await uploadOdfImageToStorage(consentCrop.blob, `consent_${form.eightDigitId}.jpg`);
 
       setForm((prev) => ({
         ...prev,
+        rawScanPage2Url: rawPage2Url,
+        page2ScanUrl: rawPage2Url,
         consentCropUrl: consentUrl || consentCrop.dataUrl,
       }));
 
-      setOcrStatus("✓ Page 2 processed! Signed legal consent preserved as high-res image.");
+      setOcrStatus("✓ Page 2 document preserved! Signed legal consent preserved as high-res image.");
     } catch (err) {
       console.error("Page 2 processing error:", err);
       setOcrStatus("Error processing Page 2 scan.");
@@ -257,16 +267,31 @@ export default function DigitalOdfForm({
 
   const handleSave = (e) => {
     e.preventDefault();
+    const activeClinician =
+      form.clinician ||
+      (currentUser?.role === "Student Clinician"
+        ? `${(currentUser?.email || "student").split("@")[0]} (Student Clinician)`
+        : currentUser?.role || DEFAULT_CLINICIAN);
+
     onSave({
       id: form.eightDigitId,
+      eightDigitId: form.eightDigitId,
       name: form.name || "Unnamed Patient",
       visitDate: form.examDate || new Date().toLocaleDateString("en-US"),
-      clinician: form.clinician || DEFAULT_CLINICIAN,
+      clinician: activeClinician,
+      submittedBy: currentUser?.email || "student@ceu.edu.ph",
       procedure: form.tentativeDiagnosis[0] || "Comprehensive Oral Diagnosis & Examination",
       notes: form.historyOfPresentIllness || form.ciRemarks || "Digitized Oral Diagnosis Form",
+      rawScanUrl: form.rawScanUrl || null,
+      rawScanPage2Url: form.rawScanPage2Url || null,
       odontogramCropUrl: form.odontogramCropUrl,
       consentCropUrl: form.consentCropUrl,
-      odfDetails: form,
+      odfDetails: {
+        ...form,
+        clinician: activeClinician,
+        submittedBy: currentUser?.email || "student@ceu.edu.ph",
+        clinicianRole: currentUser?.role || "Student Clinician",
+      },
     });
   };
 

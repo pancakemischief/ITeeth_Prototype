@@ -6,6 +6,8 @@ import PendingApproval from "./components/PendingApproval";
 import Settings from "./components/Settings";
 import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
 import DigitalOdfForm from "./components/DigitalOdfForm";
+import DocumentViewerModal from "./components/DocumentViewerModal";
+import { canApproveODF } from "./lib/roleUtils";
 import {
   fetchPatientsFromSupabase,
   fetchPendingFromSupabase,
@@ -37,6 +39,7 @@ function AppRoutes() {
   const [historyPatient, setHistoryPatient] = useState(null); // patient object to inspect records
   const [odfModalTarget, setOdfModalTarget] = useState(null); // patient object to open ODF for
   const [activeReviewModal, setActiveReviewModal] = useState(null); // pending item to review
+  const [reviewDocModalTarget, setReviewDocModalTarget] = useState(null); // item to inspect document scan for
   const [notification, setNotification] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -208,6 +211,10 @@ function AppRoutes() {
 
   // Approve a pending request
   const handleApprove = async (item) => {
+    if (!canApproveODF(currentUser?.role)) {
+      showToast("❌ Permission Denied: Student Clinicians cannot approve ODF submissions. Only Faculty and System Administrators can approve.");
+      return;
+    }
     const formattedId = to8DigitId(item.id);
     setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
 
@@ -245,6 +252,10 @@ function AppRoutes() {
 
   // Decline a pending request
   const handleDecline = async (item) => {
+    if (!canApproveODF(currentUser?.role)) {
+      showToast("❌ Permission Denied: Student Clinicians cannot decline ODF submissions.");
+      return;
+    }
     const formattedId = to8DigitId(item.id);
     setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
     setActiveReviewModal(null);
@@ -405,164 +416,238 @@ function AppRoutes() {
       )}
 
       {/* Faculty Review Modal for Pending Approvals */}
-      {activeReviewModal && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "rgba(15, 23, 42, 0.55)",
-            backdropFilter: "blur(4px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "16px",
-          }}
-          onClick={() => setActiveReviewModal(null)}
-        >
+      {activeReviewModal && (() => {
+        const allowApprove = canApproveODF(currentUser?.role);
+        return (
           <div
             style={{
-              width: "100%",
-              maxWidth: "520px",
-              background: "#ffffff",
-              borderRadius: "24px",
-              boxShadow: "0 24px 48px -12px rgba(0, 0, 0, 0.25)",
-              overflow: "hidden",
-              border: "1px solid #e2e8f0",
+              position: "fixed",
+              inset: 0,
+              backgroundColor: "rgba(15, 23, 42, 0.55)",
+              backdropFilter: "blur(4px)",
+              zIndex: 1000,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: "16px",
             }}
-            onClick={(e) => e.stopPropagation()}
+            onClick={() => setActiveReviewModal(null)}
           >
             <div
               style={{
-                background: "linear-gradient(135deg, #e91e77 0%, #f02a80 100%)",
-                padding: "22px 24px",
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
+                width: "100%",
+                maxWidth: "540px",
+                background: "#ffffff",
+                borderRadius: "24px",
+                boxShadow: "0 24px 48px -12px rgba(0, 0, 0, 0.25)",
+                overflow: "hidden",
+                border: "1px solid #e2e8f0",
               }}
+              onClick={(e) => e.stopPropagation()}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <span style={{ fontSize: "20px" }}>📋</span>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800" }}>
-                    Review Oral Diagnosis Form (ODF)
-                  </h3>
-                  <p style={{ margin: 0, fontSize: "11px", opacity: 0.9 }}>
-                    Supervising Faculty Sign-Off Gate
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setActiveReviewModal(null)}
-                style={{
-                  background: "rgba(255, 255, 255, 0.2)",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: "30px",
-                  height: "30px",
-                  color: "#fff",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ padding: "22px 24px" }}>
               <div
                 style={{
-                  fontSize: "13px",
-                  lineHeight: "1.7",
-                  color: "#1e293b",
-                  background: "#f8fafc",
-                  padding: "16px",
-                  borderRadius: "14px",
-                  border: "1px solid #e2e8f0",
-                  marginBottom: "20px",
+                  background: "linear-gradient(135deg, #e91e77 0%, #f02a80 100%)",
+                  padding: "22px 24px",
+                  color: "#ffffff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
                 }}
               >
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Patient ID:</strong>{" "}
-                  <code style={{ background: "#fff", padding: "2px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", color: "#0f172a" }}>
-                    {to8DigitId(activeReviewModal.id)}
-                  </code>
-                </p>
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Patient Name:</strong> {activeReviewModal.name}
-                </p>
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Visit Date:</strong> {activeReviewModal.visitDate}
-                </p>
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeReviewModal.clinician || DEFAULT_CLINICIAN}
-                </p>
-                <p style={{ margin: "3px 0" }}>
-                  <strong style={{ color: "#475569" }}>Proposed Procedure:</strong> {activeReviewModal.procedure}
-                </p>
-                {activeReviewModal.notes && (
-                  <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Clinical Notes:</strong> {activeReviewModal.notes}
-                  </p>
-                )}
-
-                {/* Show thumbnail if Odontogram crop exists */}
-                {(activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl) && (
-                  <div style={{ marginTop: "10px", textAlign: "center" }}>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: "#e91e77", display: "block", marginBottom: "4px" }}>
-                      Attached Odontogram Scan:
-                    </span>
-                    <img
-                      src={activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl}
-                      alt="Odontogram preview"
-                      style={{ maxHeight: "140px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                    />
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "20px" }}>📋</span>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800" }}>
+                      {allowApprove ? "Review Oral Diagnosis Form (ODF)" : "View Submitted ODF Request"}
+                    </h3>
+                    <p style={{ margin: 0, fontSize: "11px", opacity: 0.9 }}>
+                      {allowApprove ? "Supervising Faculty Sign-Off Gate" : "Student Clinician Submission View (Pending Approval)"}
+                    </p>
                   </div>
-                )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveReviewModal(null)}
+                  style={{
+                    background: "rgba(255, 255, 255, 0.2)",
+                    border: "none",
+                    borderRadius: "50%",
+                    width: "30px",
+                    height: "30px",
+                    color: "#fff",
+                    fontSize: "14px",
+                    fontWeight: "700",
+                    cursor: "pointer",
+                  }}
+                >
+                  ✕
+                </button>
               </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                <button
-                  type="button"
-                  onClick={() => handleDecline(activeReviewModal)}
+              <div style={{ padding: "22px 24px" }}>
+                {!allowApprove && (
+                  <div
+                    style={{
+                      background: "#fdf2f8",
+                      border: "1px solid #fbcfe8",
+                      borderRadius: "10px",
+                      padding: "10px 14px",
+                      marginBottom: "14px",
+                      fontSize: "12px",
+                      color: "#9d174d",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span>🔒 <strong>Student Clinician View:</strong> You can view your submitted details and attached scans. Only Supervising Faculty and System Administrators can approve or decline ODF requests.</span>
+                  </div>
+                )}
+
+                <div
                   style={{
-                    background: "#fef2f2",
-                    color: "#dc2626",
-                    border: "1.5px solid #fecaca",
-                    padding: "9px 18px",
-                    borderRadius: "12px",
-                    fontWeight: "700",
-                    cursor: "pointer",
                     fontSize: "13px",
+                    lineHeight: "1.7",
+                    color: "#1e293b",
+                    background: "#f8fafc",
+                    padding: "16px",
+                    borderRadius: "14px",
+                    border: "1px solid #e2e8f0",
+                    marginBottom: "20px",
                   }}
                 >
-                  Decline Request
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleApprove(activeReviewModal)}
-                  style={{
-                    background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
-                    color: "#ffffff",
-                    border: "none",
-                    padding: "9px 20px",
-                    borderRadius: "12px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                    fontSize: "13px",
-                    boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
-                  }}
-                >
-                  Faculty Approve
-                </button>
+                  <p style={{ margin: "3px 0" }}>
+                    <strong style={{ color: "#475569" }}>Patient ID:</strong>{" "}
+                    <code style={{ background: "#fff", padding: "2px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontWeight: "700", color: "#0f172a" }}>
+                      {to8DigitId(activeReviewModal.id)}
+                    </code>
+                  </p>
+                  <p style={{ margin: "3px 0" }}>
+                    <strong style={{ color: "#475569" }}>Patient Name:</strong> {activeReviewModal.name}
+                  </p>
+                  <p style={{ margin: "3px 0" }}>
+                    <strong style={{ color: "#475569" }}>Visit Date:</strong> {activeReviewModal.visitDate}
+                  </p>
+                  <p style={{ margin: "3px 0" }}>
+                    <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeReviewModal.clinician || DEFAULT_CLINICIAN}
+                  </p>
+                  <p style={{ margin: "3px 0" }}>
+                    <strong style={{ color: "#475569" }}>Proposed Procedure:</strong> {activeReviewModal.procedure}
+                  </p>
+                  {activeReviewModal.notes && (
+                    <p style={{ margin: "3px 0" }}>
+                      <strong style={{ color: "#475569" }}>Clinical Notes:</strong> {activeReviewModal.notes}
+                    </p>
+                  )}
+
+                  {/* Show thumbnail if Odontogram crop exists */}
+                  {(activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl) && (
+                    <div style={{ marginTop: "10px", textAlign: "center" }}>
+                      <span style={{ fontSize: "11px", fontWeight: "700", color: "#e91e77", display: "block", marginBottom: "4px" }}>
+                        Attached Odontogram Scan:
+                      </span>
+                      <img
+                        src={activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl}
+                        alt="Odontogram preview"
+                        style={{ maxHeight: "140px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setReviewDocModalTarget(activeReviewModal)}
+                    style={{
+                      background: "#f1f5f9",
+                      border: "1.5px solid #cbd5e1",
+                      color: "#0f172a",
+                      padding: "9px 16px",
+                      borderRadius: "12px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      fontSize: "13px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <span>📄 View Scanned Document</span>
+                  </button>
+
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    {allowApprove ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleDecline(activeReviewModal)}
+                          style={{
+                            background: "#fef2f2",
+                            color: "#dc2626",
+                            border: "1.5px solid #fecaca",
+                            padding: "9px 18px",
+                            borderRadius: "12px",
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                          }}
+                        >
+                          Decline Request
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApprove(activeReviewModal)}
+                          style={{
+                            background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
+                            color: "#ffffff",
+                            border: "none",
+                            padding: "9px 20px",
+                            borderRadius: "12px",
+                            fontWeight: "700",
+                            cursor: "pointer",
+                            fontSize: "13px",
+                            boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
+                          }}
+                        >
+                          Faculty Approve
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setActiveReviewModal(null)}
+                        style={{
+                          background: "#0f172a",
+                          color: "#ffffff",
+                          border: "none",
+                          padding: "9px 22px",
+                          borderRadius: "12px",
+                          fontWeight: "700",
+                          cursor: "pointer",
+                          fontSize: "13px",
+                        }}
+                      >
+                        Close
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+        );
+      })()}
+
+      {/* Scanned Document Viewer from Review Modal */}
+      {reviewDocModalTarget && (
+        <DocumentViewerModal
+          record={reviewDocModalTarget}
+          patient={reviewDocModalTarget}
+          onClose={() => setReviewDocModalTarget(null)}
+        />
       )}
     </>
   );

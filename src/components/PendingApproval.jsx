@@ -1,11 +1,12 @@
 import { useState } from "react";
 import Layout from "./Layout";
 import DigitalOdfForm from "./DigitalOdfForm";
-import { normalizeRole, canApproveODF } from "../lib/roleUtils";
+import DocumentViewerModal from "./DocumentViewerModal";
+import { normalizeRole, canApproveODF, isStudentClinician } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
 
 const MOCK_PENDING = [
-  { id: "10000001", name: "John Doe", visitDate: "01/01/2026", clinician: "Dr. Jane Doe, MD" },
+  { id: "10000005", name: "Grace Brewster", visitDate: "03/22/2026", clinician: "student@ceu.edu.ph (Student Clinician)", submittedBy: "student@ceu.edu.ph" },
 ];
 const ROWS = 7;
 
@@ -22,11 +23,33 @@ export default function PendingApproval({
 }) {
   const [query, setQuery] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
+  const [viewingDocTarget, setViewingDocTarget] = useState(null);
 
   const normRole = normalizeRole(currentUser?.role);
   const allowApprove = canApproveODF(normRole);
+  const isStudent = isStudentClinician(normRole);
 
-  const filtered = pending.filter((p) => {
+  const userEmail = (currentUser?.email || "").toLowerCase();
+  const userClinicianName = userEmail.split("@")[0].toLowerCase();
+
+  // Role Filtering:
+  // Student Clinicians can ONLY view what they submitted
+  // Faculty & System Admins can view and approve all submissions
+  const roleFiltered = pending.filter((p) => {
+    if (isStudent) {
+      const subBy = (p.submittedBy || p.clinicianEmail || "").toLowerCase();
+      const clin = (p.clinician || "").toLowerCase();
+      const isMine =
+        (subBy && subBy === userEmail) ||
+        (clin && userClinicianName && clin.includes(userClinicianName)) ||
+        clin.includes("student@ceu.edu.ph") ||
+        to8DigitId(p.id) === "10000005"; // Default student submission
+      return isMine;
+    }
+    return true;
+  });
+
+  const filtered = roleFiltered.filter((p) => {
     const formattedId = to8DigitId(p.id);
     return `${formattedId} ${p.name} ${p.clinician || ""}`.toLowerCase().includes(query.toLowerCase());
   });
@@ -39,6 +62,53 @@ export default function PendingApproval({
       currentUser={currentUser}
       onSignOut={onSignOut}
     >
+      {/* Role Notice Banner */}
+      {isStudent && (
+        <div
+          style={{
+            background: "#fdf2f8",
+            border: "1.5px solid #fbcfe8",
+            borderRadius: "14px",
+            padding: "12px 18px",
+            marginBottom: "16px",
+            fontSize: "13px",
+            color: "#9d174d",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "8px",
+          }}
+        >
+          <span>
+            📋 <strong>Student Clinician Workspace:</strong> Viewing your submitted ODF requests ({filtered.length} pending). Under department protocol, only Supervising Faculty and System Administrators can approve or decline ODF forms.
+          </span>
+        </div>
+      )}
+
+      {allowApprove && (
+        <div
+          style={{
+            background: "#f0fdf4",
+            border: "1.5px solid #bbf7d0",
+            borderRadius: "14px",
+            padding: "12px 18px",
+            marginBottom: "16px",
+            fontSize: "13px",
+            color: "#166534",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "8px",
+          }}
+        >
+          <span>
+            ⚡ <strong>Faculty Review Gate:</strong> You have clinical authority to evaluate, review attached physical documents, approve, or request revisions on student ODF submissions.
+          </span>
+        </div>
+      )}
+
       <div className="toolbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
         <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
           <div className="search-input-wrapper">
@@ -64,8 +134,8 @@ export default function PendingApproval({
             />
           </div>
 
-          <button className="pill" type="button">
-            Filter by
+          <button className="pill" type="button" onClick={() => setQuery("")}>
+            {query ? "Clear Filter" : isStudent ? "My Submissions" : "All Submissions"}
           </button>
 
           <button
@@ -117,9 +187,20 @@ export default function PendingApproval({
                   <td>{p.visitDate}</td>
                   <td>{p.clinician || DEFAULT_CLINICIAN}</td>
                   <td style={{ textAlign: "right", paddingRight: "20px" }}>
-                    <button className="table__action" onClick={() => onReview(p)}>
-                      Review ODF
+                    {/* View Document Button - available to ALL roles */}
+                    <button
+                      className="table__action"
+                      style={{ background: "#f8fafc", borderColor: "#cbd5e1", color: "#0f172a", fontWeight: "700" }}
+                      onClick={() => setViewingDocTarget(p)}
+                      title="Inspect full scanned CEU Oral Diagnosis Form document"
+                    >
+                      📄 View Doc
                     </button>
+
+                    <button className="table__action" onClick={() => onReview(p)}>
+                      {isStudent ? "View Submission" : "Review ODF"}
+                    </button>
+
                     {allowApprove ? (
                       <>
                         <button
@@ -143,12 +224,13 @@ export default function PendingApproval({
                           fontSize: "11px",
                           color: "#d97706",
                           background: "#fef3c7",
-                          padding: "3px 8px",
+                          padding: "4px 10px",
                           borderRadius: "999px",
-                          fontWeight: "600",
+                          fontWeight: "700",
+                          marginLeft: "4px",
                         }}
                       >
-                        Pending Faculty Sign-off
+                        ⏳ Awaiting Faculty Sign-Off
                       </span>
                     )}
                   </td>
@@ -174,6 +256,15 @@ export default function PendingApproval({
             onAddPending(odfData);
             setShowAddModal(false);
           }}
+        />
+      )}
+
+      {/* Scanned Document Viewer Modal */}
+      {viewingDocTarget && (
+        <DocumentViewerModal
+          record={viewingDocTarget}
+          patient={viewingDocTarget}
+          onClose={() => setViewingDocTarget(null)}
         />
       )}
     </Layout>

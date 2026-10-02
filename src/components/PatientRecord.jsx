@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Layout from "./Layout";
 import DigitalOdfForm from "./DigitalOdfForm";
+import DocumentViewerModal from "./DocumentViewerModal";
 import { normalizeRole, canUploadODF } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
 
@@ -21,6 +22,7 @@ export default function PatientRecord({
   const [query, setQuery] = useState("");
   const [showOdfModal, setShowOdfModal] = useState(false);
   const [selectedPatientForOdf, setSelectedPatientForOdf] = useState(null);
+  const [directDocPatient, setDirectDocPatient] = useState(null);
 
   const normRole = normalizeRole(currentUser?.role);
   const allowUploadODF = canUploadODF(normRole);
@@ -198,6 +200,14 @@ export default function PatientRecord({
                   <td>{p.lastVisit}</td>
                   <td>{p.clinician || DEFAULT_CLINICIAN}</td>
                   <td style={{ textAlign: "right", paddingRight: "20px" }}>
+                    <button
+                      className="table__action"
+                      style={{ background: "#f8fafc", borderColor: "#cbd5e1", color: "#0f172a", fontWeight: "700" }}
+                      onClick={() => setDirectDocPatient(p)}
+                      title="Inspect full scanned CEU Oral Diagnosis Form document"
+                    >
+                      📄 View Doc
+                    </button>
                     {allowUploadODF && (
                       <button
                         className="table__action"
@@ -266,6 +276,15 @@ export default function PatientRecord({
             setShowOdfModal(false);
             setSelectedPatientForOdf(null);
           }}
+        />
+      )}
+
+      {/* Scanned Document Viewer Modal */}
+      {directDocPatient && (
+        <DocumentViewerModal
+          record={directDocPatient}
+          patient={directDocPatient}
+          onClose={() => setDirectDocPatient(null)}
         />
       )}
     </Layout>

@@ -103,7 +103,8 @@ export const DEFAULT_PENDING = [
     eightDigitId: "10000005",
     name: "Grace Brewster",
     visitDate: "03/22/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: "student@ceu.edu.ph (Student Clinician)",
+    submittedBy: "student@ceu.edu.ph",
     procedure: "Composite Restoration Tooth #19",
     notes: "Class II resin restoration required. Supervising faculty sign-off requested.",
     odfDetails: {
@@ -111,6 +112,7 @@ export const DEFAULT_PENDING = [
       name: "Grace Brewster",
       age: "27",
       sex: "Female",
+      submittedBy: "student@ceu.edu.ph",
       chiefComplaints: ["Food impaction lower left quadrant", "Sensitivity to sweets"],
       historyOfPresentIllness: "Symptoms started 3 weeks ago on lower left molar with occasional discomfort during chewing.",
       bloodPressure: "115/75",
@@ -124,7 +126,8 @@ export const DEFAULT_PENDING = [
     eightDigitId: "10000006",
     name: "Arthur Dent",
     visitDate: "03/24/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: "alex.baleares@ceu.edu.ph (Student Clinician)",
+    submittedBy: "alex.baleares@ceu.edu.ph",
     procedure: "Panoramic Radiograph Evaluation",
     notes: "Full mouth series review for third molar impaction.",
     odfDetails: {
@@ -132,6 +135,7 @@ export const DEFAULT_PENDING = [
       name: "Arthur Dent",
       age: "33",
       sex: "Male",
+      submittedBy: "alex.baleares@ceu.edu.ph",
       chiefComplaints: ["Evaluation of wisdom teeth eruption", "Periodic jaw stiffness"],
       historyOfPresentIllness: "Mild pressure experienced at posterior mandibular angles bilaterally.",
       bloodPressure: "120/80",
@@ -282,13 +286,17 @@ function normalizePending(row, index = 1) {
     name: row.name || "Unknown Patient",
     visitDate: row.visit_date || "01/01/2026",
     clinician: row.clinician || DEFAULT_CLINICIAN,
+    submittedBy: row.submitted_by || odfDetails.submittedBy || null,
+    clinicianEmail: row.clinician_email || odfDetails.submittedBy || null,
     procedure: row.procedure || "Oral Diagnosis Form (ODF)",
     notes: row.notes || "",
     status: row.status || "pending",
     type: "ODF Submission",
     odfDetails,
-    odontogramCropUrl: odfDetails.odontogramCropUrl || null,
-    consentCropUrl: odfDetails.consentCropUrl || null,
+    rawScanUrl: row.raw_scan_url || odfDetails.rawScanUrl || null,
+    rawScanPage2Url: row.raw_scan_page2_url || odfDetails.rawScanPage2Url || null,
+    odontogramCropUrl: row.odontogram_crop_url || odfDetails.odontogramCropUrl || null,
+    consentCropUrl: row.consent_crop_url || odfDetails.consentCropUrl || null,
     submittedAt: row.created_at || new Date().toISOString(),
   };
 }
@@ -600,9 +608,14 @@ export async function savePendingToSupabase(item) {
       name: formattedPending.name,
       visit_date: formattedPending.visitDate,
       clinician: formattedPending.clinician,
+      submitted_by: formattedPending.submittedBy || odfDetails.submittedBy || null,
       procedure: formattedPending.procedure,
       notes: formattedPending.notes,
       status: "pending",
+      raw_scan_url: formattedPending.rawScanUrl || odfDetails.rawScanUrl || null,
+      raw_scan_page2_url: formattedPending.rawScanPage2Url || odfDetails.rawScanPage2Url || null,
+      odontogram_crop_url: formattedPending.odontogramCropUrl || odfDetails.odontogramCropUrl || null,
+      consent_crop_url: formattedPending.consentCropUrl || odfDetails.consentCropUrl || null,
       odf_details: odfDetails,
     };
 
@@ -648,9 +661,11 @@ export async function approvePendingInSupabase(item) {
     typeLabel: "Approved ODF",
     status: "Faculty Approved",
     notes: item.notes || "Approved faculty procedure and ODF documentation.",
+    rawScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
+    rawScanPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
     odfDetails: item.odfDetails || null,
-    odontogramCropUrl: item.odfDetails?.odontogramCropUrl || null,
-    consentCropUrl: item.odfDetails?.consentCropUrl || null,
+    odontogramCropUrl: item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl || null,
+    consentCropUrl: item.odfDetails?.consentCropUrl || item.consentCropUrl || null,
   };
   saveLocalRecord(treatmentRecord);
 
@@ -662,6 +677,8 @@ export async function approvePendingInSupabase(item) {
     clinician: item.clinician || DEFAULT_CLINICIAN,
     procedure: item.procedure || "Approved Oral Diagnosis Form (ODF)",
     notes: item.notes || "Approved faculty procedure and ODF documentation.",
+    latestOdfScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
+    latestOdfPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
     odfData: item.odfDetails || null,
   });
 
@@ -935,9 +952,11 @@ export async function fetchPatientHistoryRecords(patient) {
           clinician: appr.clinician || DEFAULT_CLINICIAN,
           summary: appr.notes || details.historyOfPresentIllness || "ODF Clinical Consultation",
           notes: appr.notes,
-          hasOdontogram: !!(details.odontogramCropUrl),
-          odontogramCropUrl: details.odontogramCropUrl,
-          consentCropUrl: details.consentCropUrl,
+          hasOdontogram: !!(details.odontogramCropUrl || appr.odontogram_crop_url),
+          rawScanUrl: appr.raw_scan_url || details.rawScanUrl || null,
+          rawScanPage2Url: appr.raw_scan_page2_url || details.rawScanPage2Url || null,
+          odontogramCropUrl: details.odontogramCropUrl || appr.odontogram_crop_url || null,
+          consentCropUrl: details.consentCropUrl || appr.consent_crop_url || null,
           odfDetails: details,
         });
       });
@@ -1004,6 +1023,64 @@ function formatDateParts(dateStr) {
     day: d.toLocaleString("en-US", { day: "2-digit" }),
     year: d.getFullYear(),
   };
+}
+
+/**
+ * Updates a record or patient document scan in local cache and Supabase
+ */
+export async function updateRecordDocumentScan({ recordId, patientId, type, url }) {
+  const numericId = to8DigitId(patientId);
+  const localRecs = getLocalRecords();
+  const updatedRecs = localRecs.map((r) => {
+    if (r.id === recordId || r.patientId === numericId) {
+      if (type === "page1") return { ...r, rawScanUrl: url, page1ScanUrl: url };
+      if (type === "page2") return { ...r, rawScanPage2Url: url, page2ScanUrl: url };
+      if (type === "odontogram") return { ...r, odontogramCropUrl: url };
+      if (type === "consent") return { ...r, consentCropUrl: url };
+    }
+    return r;
+  });
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(updatedRecs));
+    } catch {
+      // ignore
+    }
+  }
+
+  // Also update patient in local storage
+  const localPatients = getLocalPatients();
+  const updatedPatients = localPatients.map((p) => {
+    if (to8DigitId(p.id) === numericId) {
+      const odf = p.odfData || {};
+      const updatedOdf = {
+        ...odf,
+        ...(type === "page1" ? { rawScanUrl: url, page1ScanUrl: url } : {}),
+        ...(type === "page2" ? { rawScanPage2Url: url, page2ScanUrl: url } : {}),
+        ...(type === "odontogram" ? { odontogramCropUrl: url } : {}),
+        ...(type === "consent" ? { consentCropUrl: url } : {}),
+      };
+      return {
+        ...p,
+        latestOdfScanUrl: type === "page1" ? url : p.latestOdfScanUrl,
+        latestOdfPage2Url: type === "page2" ? url : p.latestOdfPage2Url,
+        odfData: updatedOdf,
+      };
+    }
+    return p;
+  });
+  saveLocalPatients(updatedPatients);
+
+  // Sync to Supabase if reachable
+  try {
+    if (type === "page1") {
+      await supabase.from("patients").update({ latest_odf_scan_url: url }).eq("eight_digit_id", numericId);
+    } else if (type === "page2") {
+      await supabase.from("patients").update({ latest_odf_page2_url: url }).eq("eight_digit_id", numericId);
+    }
+  } catch (err) {
+    console.warn("Could not sync document scan to Supabase:", err);
+  }
 }
 
 /**

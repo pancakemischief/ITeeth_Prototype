@@ -1,5 +1,5 @@
 -- =========================================================================
--- I-Teeth: Supabase RLS Fix & Database Alignment
+-- I-Teeth: Supabase RLS Fix, Document Images & Database Alignment
 -- Copy and run this script in your Supabase SQL Editor (SQL Editor -> New Query -> Run)
 -- =========================================================================
 
@@ -14,21 +14,30 @@ ALTER TABLE public.patients
   ADD COLUMN IF NOT EXISTS medical_history text,
   ADD COLUMN IF NOT EXISTS patient_user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS attending_clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
-  ADD COLUMN IF NOT EXISTS eight_digit_id text;
+  ADD COLUMN IF NOT EXISTS eight_digit_id text,
+  ADD COLUMN IF NOT EXISTS latest_odf_scan_url text,
+  ADD COLUMN IF NOT EXISTS latest_odf_page2_url text;
 
 -- Ensure unique constraint or index on eight_digit_id for fast lookup
 CREATE INDEX IF NOT EXISTS idx_patients_eight_digit_id ON public.patients (eight_digit_id);
 
+-- Align pending_approvals table to handle ODF documents, ROI crops, and student submissions
 ALTER TABLE public.pending_approvals
   ADD COLUMN IF NOT EXISTS name text,
   ADD COLUMN IF NOT EXISTS visit_date text,
   ADD COLUMN IF NOT EXISTS clinician text,
+  ADD COLUMN IF NOT EXISTS submitted_by text,
   ADD COLUMN IF NOT EXISTS procedure text,
   ADD COLUMN IF NOT EXISTS notes text,
   ADD COLUMN IF NOT EXISTS status text DEFAULT 'pending',
   ADD COLUMN IF NOT EXISTS clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS raw_scan_url text,
+  ADD COLUMN IF NOT EXISTS raw_scan_page2_url text,
+  ADD COLUMN IF NOT EXISTS odontogram_crop_url text,
+  ADD COLUMN IF NOT EXISTS consent_crop_url text,
   ADD COLUMN IF NOT EXISTS odf_details jsonb;
 
+-- Treatment records table for historical consultations & document attachments
 CREATE TABLE IF NOT EXISTS public.treatment_records (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   patient_id uuid REFERENCES public.patients(id) ON DELETE CASCADE,
@@ -39,8 +48,16 @@ CREATE TABLE IF NOT EXISTS public.treatment_records (
   notes text,
   cost numeric DEFAULT 0,
   treatment_date date DEFAULT CURRENT_DATE,
+  document_image_url text,
+  raw_scan_url text,
+  raw_scan_page2_url text,
   created_at timestamptz DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+ALTER TABLE public.treatment_records
+  ADD COLUMN IF NOT EXISTS document_image_url text,
+  ADD COLUMN IF NOT EXISTS raw_scan_url text,
+  ADD COLUMN IF NOT EXISTS raw_scan_page2_url text;
 
 CREATE TABLE IF NOT EXISTS public.appointments (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -59,7 +76,7 @@ ALTER TABLE public.pending_approvals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.treatment_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
 
--- 3. Drop existing restrictive policies to prevent 42501 Unauthorized errors
+-- 3. Drop older restrictive policies to prevent 42501 Unauthorized errors
 DROP POLICY IF EXISTS "Allow anon all on patients" ON public.patients;
 DROP POLICY IF EXISTS "Allow anon all on pending_approvals" ON public.pending_approvals;
 DROP POLICY IF EXISTS "Allow anon all on treatment_records" ON public.treatment_records;
@@ -101,11 +118,14 @@ CREATE POLICY "Allow anon all on appointments"
   USING (true)
   WITH CHECK (true);
 
--- 5. Storage bucket setup for cropped ODF images
--- Run in Storage -> Create bucket named 'odf-scans' with Public access enabled
+-- 5. Supabase Storage bucket setup for high-resolution document images & ROI crops
+-- Creates the 'odf-scans' bucket with Public access enabled
 INSERT INTO storage.buckets (id, name, public) 
 VALUES ('odf-scans', 'odf-scans', true)
 ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "Allow anon public uploads to odf-scans" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public reads from odf-scans" ON storage.objects;
 
 CREATE POLICY "Allow anon public uploads to odf-scans" 
   ON storage.objects FOR INSERT 
