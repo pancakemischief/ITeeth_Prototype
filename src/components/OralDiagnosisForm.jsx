@@ -39,8 +39,8 @@ const DECIDUOUS_TEETH_UPPER = ["55", "54", "53", "52", "51", "61", "62", "63", "
 const DECIDUOUS_TEETH_LOWER = ["85", "84", "83", "82", "81", "71", "72", "73", "74", "75"];
 
 const INITIAL_DIAGNOSTIC_TESTS = [
-  { toothNo: "19", mobility: "0", palpation: "Negative", percussion: "Positive (Mild)", cavity: "Class II MO", hotTest: "WNL", coldTest: "Delayed (+)", anesthetic: "Positive", electricPulp: "Normal" },
-  { toothNo: "14", mobility: "0", palpation: "Negative", percussion: "Negative", cavity: "Class I Occlusal", hotTest: "WNL", coldTest: "WNL", anesthetic: "None", electricPulp: "Normal" },
+  { toothNo: "", mobility: "", palpation: "", percussion: "", cavity: "", hotTest: "", coldTest: "", anesthetic: "", electricPulp: "" },
+  { toothNo: "", mobility: "", palpation: "", percussion: "", cavity: "", hotTest: "", coldTest: "", anesthetic: "", electricPulp: "" },
 ];
 
 export default function OralDiagnosisForm({
@@ -131,10 +131,10 @@ export default function OralDiagnosisForm({
       eyesSpecify: initialData?.eyesSpecify || "",
 
       // Vital Signs
-      bloodPressure: initialData?.bloodPressure || "120/80",
-      pulseRate: initialData?.pulseRate || "72 bpm",
-      respiratoryRate: initialData?.respiratoryRate || "16 cpm",
-      temperature: initialData?.temperature || "36.5 °C",
+      bloodPressure: initialData?.bloodPressure || "",
+      pulseRate: initialData?.pulseRate || "",
+      respiratoryRate: initialData?.respiratoryRate || "",
+      temperature: initialData?.temperature || "",
 
       // Clinical Exam - Intraoral
       lip: initialData?.lip || "Normal",
@@ -164,12 +164,12 @@ export default function OralDiagnosisForm({
 
       // Page 2: Diagnostic Tests
       diagnosticTests: initialData?.diagnosticTests || INITIAL_DIAGNOSTIC_TESTS,
-      radiographicInterpretation: initialData?.radiographicInterpretation || "Periapical radiograph shows radiolucency on coronal portion of Tooth #19 approximating pulp without periapical pathology.",
+      radiographicInterpretation: initialData?.radiographicInterpretation || "",
       tentativeDiagnosis: initialData?.tentativeDiagnosis?.length === 6
         ? initialData.tentativeDiagnosis
         : [
-            initialData?.procedure || (initialData?.tentativeDiagnosis?.[0] || "Dental Caries #19 (Class II MO)"),
-            initialData?.tentativeDiagnosis?.[1] || "Gingivitis associated with dental plaque",
+            initialData?.tentativeDiagnosis?.[0] || "",
+            initialData?.tentativeDiagnosis?.[1] || "",
             initialData?.tentativeDiagnosis?.[2] || "",
             initialData?.tentativeDiagnosis?.[3] || "",
             initialData?.tentativeDiagnosis?.[4] || "",
@@ -178,36 +178,88 @@ export default function OralDiagnosisForm({
       recommendedTreatmentPlan: initialData?.recommendedTreatmentPlan?.length === 6
         ? initialData.recommendedTreatmentPlan
         : [
-            initialData?.recommendedTreatmentPlan?.[0] || "Composite Restoration Tooth #19",
-            initialData?.recommendedTreatmentPlan?.[1] || "Full Mouth Oral Prophylaxis & Scaling",
-            initialData?.recommendedTreatmentPlan?.[2] || "Oral Hygiene Instructions (Bass Technique)",
+            initialData?.recommendedTreatmentPlan?.[0] || "",
+            initialData?.recommendedTreatmentPlan?.[1] || "",
+            initialData?.recommendedTreatmentPlan?.[2] || "",
             initialData?.recommendedTreatmentPlan?.[3] || "",
             initialData?.recommendedTreatmentPlan?.[4] || "",
             initialData?.recommendedTreatmentPlan?.[5] || "",
           ],
-      examinedBy: initialData?.examinedBy || (currentUser?.role || "Student Clinician"),
-      examDate: initialData?.examDate || new Date().toISOString().split("T")[0],
-      clinicLevel: initialData?.clinicLevel || "Clinical Dentistry II",
+      examinedBy: initialData?.examinedBy || "",
+      examDate: initialData?.examDate || "",
+      clinicLevel: initialData?.clinicLevel || "",
 
-      // Approval Log
-      treatmentLog: initialData?.treatmentLog || [
-        { date: "03/24/2026", casesApproved: "Oral Diagnosis & Treatment Plan", toothNo: "Full Mouth", ciSign: "Signed - Faculty CI" },
-      ],
-      ciRemarks: initialData?.ciRemarks || "Patient cleared for restorative and periodontal clinical requirements. Proceed with conservative cavity prep.",
+      // 9 columns x 10 rows Treatment Approval Log
+      treatmentLogRows: initialData?.treatmentLogRows && initialData.treatmentLogRows.length === 10
+        ? initialData.treatmentLogRows
+        : Array.from({ length: 10 }, (_, i) => {
+            const left = initialData?.treatmentLog?.[i] || {};
+            const right = initialData?.treatmentLog?.[i + 10] || {};
+            return {
+              leftDate: left.date || "",
+              leftCasesApproved: left.casesApproved || "",
+              leftToothNo: left.toothNo || "",
+              leftCi: left.ciSign || "",
+              rightDate: right.date || "",
+              rightCasesApproved: right.casesApproved || "",
+              rightToothNo: right.toothNo || "",
+              rightCi: right.ciSign || "",
+            };
+          }),
+      treatmentLog: initialData?.treatmentLog || [],
+      ciRemarks: initialData?.ciRemarks || "",
 
       // Section D / Consent Block
       rawScanPage2Url: initialData?.rawScanPage2Url || null,
       consentCropUrl: initialData?.consentCropUrl || null,
-      consentPatientName: initialData?.name || "",
-      consentDate: initialData?.visitDate || new Date().toISOString().split("T")[0],
-      consentGuardianName: "",
-      consentClinicianName: currentUser?.role || DEFAULT_CLINICIAN,
+      consentPatientName: initialData?.consentPatientName || "",
+      consentHomeAddress: initialData?.consentHomeAddress || "",
+      consentDate: initialData?.consentDate || "",
+      consentGuardianName: initialData?.consentGuardianName || "",
+      consentMinorPatientName: initialData?.consentMinorPatientName || "",
+      consentClinicianName: initialData?.consentClinicianName || "",
+      consentClinicianDate: initialData?.consentClinicianDate || "",
       clinician: currentUser?.role || DEFAULT_CLINICIAN,
     };
   });
 
   const updateField = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updateTreatmentLogRow = (rowIndex, field, value) => {
+    setForm((prev) => {
+      const rows = [...prev.treatmentLogRows];
+      rows[rowIndex] = { ...rows[rowIndex], [field]: value };
+
+      const flatLog = [];
+      rows.forEach((r) => {
+        if (r.leftDate || r.leftCasesApproved || r.leftToothNo || r.leftCi) {
+          flatLog.push({
+            date: r.leftDate,
+            casesApproved: r.leftCasesApproved,
+            toothNo: r.leftToothNo,
+            ciSign: r.leftCi,
+          });
+        }
+      });
+      rows.forEach((r) => {
+        if (r.rightDate || r.rightCasesApproved || r.rightToothNo || r.rightCi) {
+          flatLog.push({
+            date: r.rightDate,
+            casesApproved: r.rightCasesApproved,
+            toothNo: r.rightToothNo,
+            ciSign: r.rightCi,
+          });
+        }
+      });
+
+      return {
+        ...prev,
+        treatmentLogRows: rows,
+        treatmentLog: flatLog.length > 0 ? flatLog : prev.treatmentLog,
+      };
+    });
   };
 
   const updateComplaint = (index, value) => {
@@ -491,7 +543,7 @@ export default function OralDiagnosisForm({
       ...prev,
       diagnosticTests: [
         ...prev.diagnosticTests,
-        { toothNo: "", mobility: "0", palpation: "Normal", percussion: "Normal", cavity: "", hotTest: "WNL", coldTest: "WNL", anesthetic: "None", electricPulp: "Normal" },
+        { toothNo: "", mobility: "", palpation: "", percussion: "", cavity: "", hotTest: "", coldTest: "", anesthetic: "", electricPulp: "" },
       ],
     }));
   };
@@ -1021,45 +1073,23 @@ export default function OralDiagnosisForm({
                           <option>Yes</option>
                         </select>
                       </div>
-                      {form.previousExtraction === "Yes" && (
-                        <div className="ceu-field ceu-field--grow">
-                          <span className="ceu-label">When:</span>
-                          <input
-                            type="text"
-                            className="ceu-line-input"
-                            value={form.extractionWhen}
-                            onChange={(e) => updateField("extractionWhen", e.target.value)}
-                            placeholder="Month/Year"
-                          />
-                        </div>
-                      )}
                       <div className="ceu-field ceu-field--grow">
-                        <span className="ceu-label">Complications during/after extraction:</span>
+                        <span className="ceu-label">When:</span>
                         <input
                           type="text"
                           className="ceu-line-input"
-                          value={form.extractionComplications}
-                          onChange={(e) => updateField("extractionComplications", e.target.value)}
-                          placeholder="e.g. prolonged bleeding, none"
+                          value={form.extractionWhen}
+                          onChange={(e) => updateField("extractionWhen", e.target.value)}
+                          placeholder="Month/Year"
                         />
                       </div>
                     </div>
 
                     <div className="ceu-form-row">
-                      <div className="ceu-field ceu-field--grow">
-                        <span className="ceu-label">Allergic reaction to local anesthesia:</span>
-                        <input
-                          type="text"
-                          className="ceu-line-input"
-                          value={form.localAnesthesiaAllergy}
-                          onChange={(e) => updateField("localAnesthesiaAllergy", e.target.value)}
-                          placeholder="Specify drug / symptoms"
-                        />
-                      </div>
-                      <div className="ceu-field ceu-field--sm">
+                      <div className="ceu-field ceu-field--inline">
                         <span className="ceu-label">Denture:</span>
                         <select
-                          className="ceu-line-input"
+                          className="ceu-line-input ceu-line-input--inline"
                           value={form.denture}
                           onChange={(e) => updateField("denture", e.target.value)}
                         >
@@ -1070,17 +1100,16 @@ export default function OralDiagnosisForm({
                           <option>Partial (RPD)</option>
                         </select>
                       </div>
-                      {form.denture !== "None" && (
-                        <div className="ceu-field ceu-field--sm">
-                          <span className="ceu-label">Since when:</span>
-                          <input
-                            type="text"
-                            className="ceu-line-input"
-                            value={form.dentureSinceWhen}
-                            onChange={(e) => updateField("dentureSinceWhen", e.target.value)}
-                          />
-                        </div>
-                      )}
+                      <div className="ceu-field ceu-field--grow">
+                        <span className="ceu-label">Since when:</span>
+                        <input
+                          type="text"
+                          className="ceu-line-input"
+                          value={form.dentureSinceWhen}
+                          onChange={(e) => updateField("dentureSinceWhen", e.target.value)}
+                          placeholder="Month/Year or Duration"
+                        />
+                      </div>
                     </div>
                   </div>
                 </section>
@@ -1169,7 +1198,7 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.bloodPressure}
                         onChange={(e) => updateField("bloodPressure", e.target.value)}
-                        placeholder="120/80"
+                        placeholder=""
                       />
                     </div>
                     <div className="ceu-field ceu-field--vital">
@@ -1179,7 +1208,7 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.pulseRate}
                         onChange={(e) => updateField("pulseRate", e.target.value)}
-                        placeholder="72 bpm"
+                        placeholder=""
                       />
                     </div>
                     <div className="ceu-field ceu-field--vital">
@@ -1189,7 +1218,7 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.respiratoryRate}
                         onChange={(e) => updateField("respiratoryRate", e.target.value)}
-                        placeholder="16 cpm"
+                        placeholder=""
                       />
                     </div>
                     <div className="ceu-field ceu-field--vital">
@@ -1199,7 +1228,7 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.temperature}
                         onChange={(e) => updateField("temperature", e.target.value)}
-                        placeholder="36.5 °C"
+                        placeholder=""
                       />
                     </div>
                   </div>
@@ -1599,7 +1628,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.toothNo}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "toothNo", e.target.value)}
-                                placeholder="#19"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1607,15 +1636,15 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.mobility}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "mobility", e.target.value)}
-                                placeholder="0"
+                                placeholder=""
                               />
                             </td>
                             <td>
                               <input
                                 className="ceu-table-cell-input"
-                                value={row.palapation || row.palpation}
+                                value={row.palpation || ""}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "palpation", e.target.value)}
-                                placeholder="Neg"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1623,7 +1652,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.percussion}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "percussion", e.target.value)}
-                                placeholder="Mild"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1631,7 +1660,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.cavity}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "cavity", e.target.value)}
-                                placeholder="Class II"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1639,7 +1668,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.hotTest}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "hotTest", e.target.value)}
-                                placeholder="WNL"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1647,7 +1676,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.coldTest}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "coldTest", e.target.value)}
-                                placeholder="Delayed"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1655,7 +1684,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.anesthetic}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "anesthetic", e.target.value)}
-                                placeholder="Pos"
+                                placeholder=""
                               />
                             </td>
                             <td>
@@ -1663,7 +1692,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-table-cell-input"
                                 value={row.electricPulp}
                                 onChange={(e) => updateDiagnosticRow(rIdx, "electricPulp", e.target.value)}
-                                placeholder="Normal"
+                                placeholder=""
                               />
                             </td>
                           </tr>
@@ -1691,7 +1720,7 @@ export default function OralDiagnosisForm({
                     className="ceu-ruled-textarea"
                     value={form.radiographicInterpretation}
                     onChange={(e) => updateField("radiographicInterpretation", e.target.value)}
-                    placeholder="Bitewing / periapical findings, bone levels, apical radiolucency..."
+                    placeholder=""
                   />
                 </section>
 
@@ -1711,7 +1740,7 @@ export default function OralDiagnosisForm({
                               className="ceu-ruled-input"
                               value={item}
                               onChange={(e) => updateDiagnosis(idx, e.target.value)}
-                              placeholder={idx === 0 ? "e.g. Dental Caries Tooth #19" : ""}
+                              placeholder=""
                             />
                           </div>
                         ))}
@@ -1731,7 +1760,7 @@ export default function OralDiagnosisForm({
                               className="ceu-ruled-input"
                               value={item}
                               onChange={(e) => updateTreatmentPlan(idx, e.target.value)}
-                              placeholder={idx === 0 ? "e.g. Posterior Composite Restoration #19" : ""}
+                              placeholder=""
                             />
                           </div>
                         ))}
@@ -1747,6 +1776,7 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.examinedBy}
                         onChange={(e) => updateField("examinedBy", e.target.value)}
+                        placeholder=""
                       />
                     </div>
                     <div className="ceu-field ceu-field--sm">
@@ -1765,62 +1795,123 @@ export default function OralDiagnosisForm({
                         className="ceu-line-input"
                         value={form.clinicLevel}
                         onChange={(e) => updateField("clinicLevel", e.target.value)}
-                        placeholder="Clinical Dentistry II"
+                        placeholder=""
                       />
                     </div>
                   </div>
                 </section>
 
-                {/* Treatment Approval Log Grid & CI's Remarks */}
-                <section className="ceu-section">
-                  <div className="ceu-treatment-log-split">
-                    <div className="ceu-log-half">
-                      <table className="ceu-bordered-table">
-                        <thead>
-                          <tr>
-                            <th>Date</th>
-                            <th>Cases / Approved</th>
-                            <th>Tooth No.</th>
-                            <th>O.D. C.I.</th>
+                {/* 9 columns x 10 rows Treatment / Cases Approval Ledger Table */}
+                <section className="ceu-section ceu-section--treatment-ledger">
+                  <div className="ceu-table-responsive">
+                    <table className="ceu-bordered-table ceu-treatment-ledger-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: "11%" }}>Date</th>
+                          <th style={{ width: "23%" }}>Cases/Approved</th>
+                          <th style={{ width: "8%" }}>Tooth No.</th>
+                          <th style={{ width: "7%" }}>O.D. C.I</th>
+                          <th className="ceu-table-divider-col" style={{ width: "2%" }}></th>
+                          <th style={{ width: "11%" }}>Date</th>
+                          <th style={{ width: "23%" }}>Cases/Approved</th>
+                          <th style={{ width: "8%" }}>Tooth No.</th>
+                          <th style={{ width: "7%" }}>O.D. C.I</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {form.treatmentLogRows.map((row, rIdx) => (
+                          <tr key={`ledger-row-${rIdx}`}>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.leftDate}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "leftDate", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input ceu-table-cell-input--left"
+                                value={row.leftCasesApproved}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "leftCasesApproved", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.leftToothNo}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "leftToothNo", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.leftCi}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "leftCi", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td className="ceu-table-divider-cell"></td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.rightDate}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "rightDate", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input ceu-table-cell-input--left"
+                                value={row.rightCasesApproved}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "rightCasesApproved", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.rightToothNo}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "rightToothNo", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
+                            <td>
+                              <input
+                                type="text"
+                                className="ceu-table-cell-input"
+                                value={row.rightCi}
+                                onChange={(e) => updateTreatmentLogRow(rIdx, "rightCi", e.target.value)}
+                                placeholder=""
+                              />
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody>
-                          {form.treatmentLog.map((log, lIdx) => (
-                            <tr key={`log-${lIdx}`}>
-                              <td>{log.date}</td>
-                              <td>{log.casesApproved}</td>
-                              <td>{log.toothNo}</td>
-                              <td>{log.ciSign}</td>
-                            </tr>
-                          ))}
-                          <tr>
-                            <td style={{ height: "26px" }}></td>
-                            <td></td>
-                            <td></td>
-                            <td></td>
-                          </tr>
-                          <tr>
-                            <td style={{ height: "26px" }}></td>
-                            <td></td>
-                            <td></td>
-                            <td></td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
 
-                    <div className="ceu-remarks-half">
-                      <div className="ceu-subheading">
-                        <strong>CI's Remarks:</strong>
-                      </div>
-                      <textarea
-                        rows={4}
-                        className="ceu-ruled-textarea"
-                        value={form.ciRemarks}
-                        onChange={(e) => updateField("ciRemarks", e.target.value)}
-                        placeholder="Clinical Instructor evaluations, rubric notes and clearance..."
-                      />
+                  {/* CI's Remarks moved below the table */}
+                  <div className="ceu-ci-remarks-container" style={{ marginTop: "12px" }}>
+                    <div className="ceu-subheading">
+                      <strong>CI's Remarks:</strong>
                     </div>
+                    <textarea
+                      rows={3}
+                      className="ceu-ruled-textarea"
+                      value={form.ciRemarks}
+                      onChange={(e) => updateField("ciRemarks", e.target.value)}
+                      placeholder=""
+                    />
                   </div>
                 </section>
 
@@ -1829,11 +1920,7 @@ export default function OralDiagnosisForm({
                   <div className="ceu-privacy-statement-box">
                     <h5>DATA PRIVACY ACT STATEMENT POLICY</h5>
                     <p>
-                      Centro Escolar University recognizes its responsibilities under Republic Act No. 10173 (Act),
-                      also known as the <em>Data Privacy Act of 2012</em>, with respect to the personal and sensitive
-                      personal information you provide, and is committed to ensuring the confidentiality and security
-                      of such information. The data collected herein will be used strictly for clinical teaching,
-                      diagnosis, treatment planning, and dental healthcare records within CEU School of Dentistry.
+                      Centro Escolar University is committed to respect and value the privacy rights of individuals. We will ensure that all personal data are protected and processed in accordance wih Repluc Act No. 10171 or the Data Privacy Act of 2012 and its implementing Rules and Regulations. We recognize the confidentiality of personal data and adhere to the general principles of transparency, legitimate purpose, and proportionality. A cope of our full Data Privacy Notice may be obtained from the Office of the Dean and Section Bulletin Board of the School of Dentistry.
                     </p>
                   </div>
                 </section>
@@ -1900,17 +1987,17 @@ export default function OralDiagnosisForm({
                         <input
                           type="text"
                           className="ceu-inline-line"
-                          value={form.consentPatientName || form.name}
+                          value={form.consentPatientName}
                           onChange={(e) => updateField("consentPatientName", e.target.value)}
-                          placeholder="Full Patient Legal Name"
+                          placeholder=""
                         />
                         , of legal age, residing at{" "}
                         <input
                           type="text"
                           className="ceu-inline-line ceu-inline-line--wide"
-                          value={form.homeAddress}
-                          onChange={(e) => updateField("homeAddress", e.target.value)}
-                          placeholder="Home Address"
+                          value={form.consentHomeAddress}
+                          onChange={(e) => updateField("consentHomeAddress", e.target.value)}
+                          placeholder=""
                         />
                         , hereby authorize and consent to the dental examination and necessary diagnostic procedures,
                         administration of local anesthesia, dental prophylaxis, restorative procedures, and other
@@ -1927,18 +2014,30 @@ export default function OralDiagnosisForm({
                             className="ceu-inline-line"
                             value={form.consentGuardianName}
                             onChange={(e) => updateField("consentGuardianName", e.target.value)}
-                            placeholder="Parent / Legal Guardian Name"
+                            placeholder=""
                           />
                           , the parent/legal guardian of{" "}
-                          <span className="ceu-minor-target-name">{form.name || "[Patient Name]"}</span>, hereby give my
-                          full consent for the dental procedures stated above.
+                          <input
+                            type="text"
+                            className="ceu-inline-line"
+                            value={form.consentMinorPatientName}
+                            onChange={(e) => updateField("consentMinorPatientName", e.target.value)}
+                            placeholder=""
+                          />
+                          , hereby give my full consent for the dental procedures stated above.
                         </p>
                       </div>
 
                       <div className="ceu-consent-signatures-grid">
                         <div className="ceu-sig-block">
                           <div className="ceu-sig-line">
-                            <span className="ceu-sig-text-printed">{form.name || "Patient / Guardian"}</span>
+                            <input
+                              type="text"
+                              className="ceu-line-input ceu-line-input--center"
+                              value={form.consentPatientName}
+                              onChange={(e) => updateField("consentPatientName", e.target.value)}
+                              placeholder=""
+                            />
                           </div>
                           <span className="ceu-sig-caption">Signature over Printed Name of Patient / Parent / Legal Guardian</span>
                           <div className="ceu-field ceu-field--sig-date">
@@ -1954,7 +2053,13 @@ export default function OralDiagnosisForm({
 
                         <div className="ceu-sig-block">
                           <div className="ceu-sig-line">
-                            <span className="ceu-sig-text-printed">{form.consentClinicianName || "Dr. Jane Doe / Student Clinician"}</span>
+                            <input
+                              type="text"
+                              className="ceu-line-input ceu-line-input--center"
+                              value={form.consentClinicianName}
+                              onChange={(e) => updateField("consentClinicianName", e.target.value)}
+                              placeholder=""
+                            />
                           </div>
                           <span className="ceu-sig-caption">Signature over Printed Name of Clinician</span>
                           <div className="ceu-field ceu-field--sig-date">
@@ -1962,8 +2067,8 @@ export default function OralDiagnosisForm({
                             <input
                               type="date"
                               className="ceu-line-input"
-                              value={form.consentDate}
-                              onChange={(e) => updateField("consentDate", e.target.value)}
+                              value={form.consentClinicianDate || form.consentDate}
+                              onChange={(e) => updateField("consentClinicianDate", e.target.value)}
                             />
                           </div>
                         </div>
