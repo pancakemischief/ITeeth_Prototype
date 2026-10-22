@@ -135,35 +135,7 @@ export default function DocumentViewerModal({
   };
 
   const handlePrint = () => {
-    const printWin = window.open("", "_blank");
-    if (!printWin) {
-      alert("Please allow popups to print documents.");
-      return;
-    }
-    printWin.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>CEU Oral Diagnosis Form - Patient #${eightDigitId}</title>
-          <style>
-            body { margin: 0; padding: 20px; text-align: center; font-family: sans-serif; background: #fff; }
-            img { max-width: 100%; height: auto; page-break-after: always; }
-          </style>
-        </head>
-        <body>
-          <h2>Centro Escolar University • School of Dentistry</h2>
-          <h3>Oral Diagnosis Form - Patient #${eightDigitId} (${docData.name})</h3>
-          <img src="${page1Image}" alt="ODF Page 1" />
-          <img src="${page2Image}" alt="ODF Page 2" />
-          <script>
-            window.onload = function() {
-              window.print();
-            };
-          </script>
-        </body>
-      </html>
-    `);
-    printWin.document.close();
+    window.print();
   };
 
   return (

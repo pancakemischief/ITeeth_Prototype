@@ -615,7 +615,7 @@ export default function DigitalOdfForm({
               {/* Past Medical History Checkboxes */}
               <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "16px" }}>
                 <h3 style={{ margin: "0 0 10px", fontSize: "14px", fontWeight: "800", color: "#e91e77" }}>
-                  3. PAST HISTORY (MEDICAL & DENTAL)
+                  C. Past History: Mark(/) if any conditions are present and (X) if none.
                 </h3>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "6px", fontSize: "12px" }}>
                   {MEDICAL_CONDITIONS.map((cond) => (
@@ -629,9 +629,9 @@ export default function DigitalOdfForm({
                     </label>
                   ))}
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginTop: "10px", fontSize: "12px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginTop: "10px", fontSize: "12px" }}>
                   <div>
-                    <label style={{ display: "block", fontWeight: "600", color: "#475569" }}>Allergies (Specify)</label>
+                    <label style={{ display: "block", fontWeight: "600", color: "#475569" }}>Allergy, specify:</label>
                     <input
                       style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
                       value={form.allergySpecify}
@@ -640,12 +640,21 @@ export default function DigitalOdfForm({
                     />
                   </div>
                   <div>
-                    <label style={{ display: "block", fontWeight: "600", color: "#475569" }}>Medications Currently Taking</label>
+                    <label style={{ display: "block", fontWeight: "600", color: "#475569" }}>Other Illnesses:</label>
+                    <input
+                      style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+                      value={form.otherIllnesses}
+                      onChange={(e) => setForm({ ...form, otherIllnesses: e.target.value })}
+                      placeholder="Other medical conditions"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontWeight: "600", color: "#475569" }}>Medications currently taking</label>
                     <input
                       style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
                       value={form.medications}
                       onChange={(e) => setForm({ ...form, medications: e.target.value })}
-                      placeholder="e.g. Amlodipine 5mg"
+                      placeholder="e.g. Maintenance meds"
                     />
                   </div>
                 </div>
