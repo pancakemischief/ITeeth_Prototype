@@ -280,9 +280,13 @@ function normalizePatient(row, index = 1) {
  */
 function normalizePending(row, index = 1) {
   const odfDetails = row.odf_details || {};
+  const eightDigitId = to8DigitId(
+    row.eight_digit_id || odfDetails.eightDigitId || row.id,
+    index,
+  );
   return {
-    id: to8DigitId(row.id, index),
-    eightDigitId: to8DigitId(row.id, index),
+    id: eightDigitId,
+    eightDigitId,
     name: row.name || "Unknown Patient",
     visitDate: row.visit_date || "01/01/2026",
     clinician: row.clinician || DEFAULT_CLINICIAN,
@@ -604,7 +608,7 @@ export async function savePendingToSupabase(item) {
   // 3. Attempt insert to Supabase pending_approvals table
   try {
     const payload = {
-      id: numericId,
+      eight_digit_id: numericId,
       name: formattedPending.name,
       visit_date: formattedPending.visitDate,
       clinician: formattedPending.clinician,
@@ -621,7 +625,7 @@ export async function savePendingToSupabase(item) {
 
     const { data, error } = await supabase
       .from("pending_approvals")
-      .upsert(payload, { onConflict: "id" })
+      .upsert(payload, { onConflict: "eight_digit_id" })
       .select();
 
     if (error) {
@@ -687,7 +691,7 @@ export async function approvePendingInSupabase(item) {
     await supabase
       .from("pending_approvals")
       .update({ status: "approved" })
-      .eq("id", numericId);
+      .eq("eight_digit_id", numericId);
 
     // Also insert into treatment_records in Supabase if patient has a dbId UUID
     if (patientResult.data?.dbId && isUuid(patientResult.data.dbId)) {
@@ -722,7 +726,7 @@ export async function declinePendingInSupabase(item) {
     const { error } = await supabase
       .from("pending_approvals")
       .update({ status: "declined" })
-      .eq("id", numericId);
+      .eq("eight_digit_id", numericId);
 
     if (error) {
       console.warn("[Supabase] declinePending error:", error.message);
@@ -936,7 +940,7 @@ export async function fetchPatientHistoryRecords(patient) {
     const { data: approvals } = await supabase
       .from("pending_approvals")
       .select("*")
-      .eq("id", numericId);
+      .eq("eight_digit_id", numericId);
 
     if (Array.isArray(approvals)) {
       approvals.forEach((appr) => {

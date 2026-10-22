@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS idx_patients_eight_digit_id ON public.patients (eight
 
 -- Align pending_approvals table to handle ODF documents, ROI crops, and student submissions
 ALTER TABLE public.pending_approvals
+  ADD COLUMN IF NOT EXISTS eight_digit_id text,
   ADD COLUMN IF NOT EXISTS name text,
   ADD COLUMN IF NOT EXISTS visit_date text,
   ADD COLUMN IF NOT EXISTS clinician text,
@@ -36,6 +37,22 @@ ALTER TABLE public.pending_approvals
   ADD COLUMN IF NOT EXISTS odontogram_crop_url text,
   ADD COLUMN IF NOT EXISTS consent_crop_url text,
   ADD COLUMN IF NOT EXISTS odf_details jsonb;
+
+-- Preserve the patient-facing ID separately from the table's primary key.
+UPDATE public.pending_approvals
+SET eight_digit_id = COALESCE(
+  CASE
+    WHEN odf_details->>'eightDigitId' ~ '^[0-9]{8}$'
+      THEN odf_details->>'eightDigitId'
+  END,
+  CASE
+    WHEN id::text ~ '^[0-9]{8}$' THEN id::text
+  END
+)
+WHERE eight_digit_id IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_eight_digit_id
+  ON public.pending_approvals (eight_digit_id);
 
 -- Treatment records table for historical consultations & document attachments
 CREATE TABLE IF NOT EXISTS public.treatment_records (
