@@ -6,7 +6,7 @@ const env =
   {};
 
 const supabaseUrl =
-  env.VITE_SUPABASE_URL || "https://mnsqgpiupgelkkmknyex.supabase.co";
+  env.VITE_SUPABASE_URL || "https://morevxxzynyatbeabwxk.supabase.co";
 
 const supabaseAnonKey =
   env.VITE_SUPABASE_ANON_KEY ||
