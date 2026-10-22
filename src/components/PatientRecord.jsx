@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Layout from "./Layout";
-import DigitalOdfForm from "./DigitalOdfForm";
+import OralDiagnosisForm from "./OralDiagnosisForm";
 import DocumentViewerModal from "./DocumentViewerModal";
 import { normalizeRole, canUploadODF } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
@@ -246,7 +246,7 @@ export default function PatientRecord({
 
       {/* Oral Diagnosis Form (ODF) Upload Modal */}
       {showOdfModal && (
-        <DigitalOdfForm
+        <OralDiagnosisForm
           patientId={selectedPatientForOdf ? to8DigitId(selectedPatientForOdf.id) : to8DigitId(patients.length + 1)}
           initialData={selectedPatientForOdf ? {
             eightDigitId: to8DigitId(selectedPatientForOdf.id),

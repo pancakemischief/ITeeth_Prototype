@@ -1,6 +1,6 @@
 import { useState } from "react";
 import Layout from "./Layout";
-import DigitalOdfForm from "./DigitalOdfForm";
+import OralDiagnosisForm from "./OralDiagnosisForm";
 import DocumentViewerModal from "./DocumentViewerModal";
 import { normalizeRole, canApproveODF, isStudentClinician } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
@@ -248,7 +248,7 @@ export default function PendingApproval({
 
       {/* Add Request Modal */}
       {showAddModal && (
-        <DigitalOdfForm
+        <OralDiagnosisForm
           patientId={to8DigitId(pending.length + 10)}
           currentUser={currentUser}
           onCancel={() => setShowAddModal(false)}

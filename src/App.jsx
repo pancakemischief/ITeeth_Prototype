@@ -5,7 +5,7 @@ import PatientRecord from "./components/PatientRecord";
 import PendingApproval from "./components/PendingApproval";
 import Settings from "./components/Settings";
 import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
-import DigitalOdfForm from "./components/DigitalOdfForm";
+import OralDiagnosisForm from "./components/OralDiagnosisForm";
 import DocumentViewerModal from "./components/DocumentViewerModal";
 import { canApproveODF } from "./lib/roleUtils";
 import {
@@ -388,7 +388,7 @@ function AppRoutes() {
 
       {/* Digital ODF Modal opened directly from History Modal or action */}
       {odfModalTarget && (
-        <DigitalOdfForm
+        <OralDiagnosisForm
           patientId={to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId)}
           initialData={{
             eightDigitId: to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId),

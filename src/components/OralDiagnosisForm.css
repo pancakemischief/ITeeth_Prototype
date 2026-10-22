@@ -1,0 +1,265 @@
+.odf-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.68);
+}
+
+.odf-sheet {
+  width: min(100%, 900px);
+  margin: auto;
+  padding: 36px 42px;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.24);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.odf-header {
+  margin-bottom: 22px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #111827;
+  text-align: center;
+}
+
+.odf-header h1,
+.odf-header h2,
+.odf-header h3,
+.odf-header p {
+  margin: 0;
+}
+
+.odf-header h1 {
+  font-size: 21px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.odf-header h2 {
+  margin-top: 3px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.odf-header p {
+  margin-top: 3px;
+  font-size: 12px;
+}
+
+.odf-header h3 {
+  margin-top: 15px;
+  font-size: 18px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.odf-section {
+  margin: 0 0 19px;
+}
+
+.odf-section h4 {
+  margin: 0 0 11px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid #64748b;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.odf-grid {
+  display: grid;
+  gap: 12px 16px;
+}
+
+.odf-grid--patient {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.odf-grid--complaints,
+.odf-grid--exam {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.odf-grid--vitals {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.odf-grid--plans {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.odf-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.odf-field > span {
+  font-weight: 700;
+}
+
+.odf-field input,
+.odf-field select,
+.odf-field textarea,
+.odf-list-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #9ca3af;
+  border-radius: 2px;
+  font: inherit;
+}
+
+.odf-field input[readonly] {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.odf-field textarea {
+  resize: vertical;
+}
+
+.odf-field--block {
+  margin-top: 12px;
+}
+
+.odf-field--detail {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.7fr) minmax(100px, 1fr) minmax(0, 1.5fr);
+  align-items: center;
+}
+
+.odf-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #9ca3af;
+}
+
+.odf-fieldset legend {
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.odf-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.odf-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.odf-checkbox input {
+  margin: 1px 0 0;
+}
+
+.odf-list-input + .odf-list-input {
+  margin-top: 6px;
+}
+
+.odf-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #9ca3af;
+}
+
+.odf-actions p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.odf-actions > div {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.odf-button {
+  padding: 9px 14px;
+  border: 1px solid #64748b;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.odf-button--cancel {
+  color: #334155;
+  background: #f8fafc;
+}
+
+.odf-button--save {
+  color: #fff;
+  background: #0369a1;
+  border-color: #0369a1;
+}
+
+@media (max-width: 650px) {
+  .odf-overlay {
+    padding: 10px;
+  }
+
+  .odf-sheet {
+    padding: 24px 18px;
+  }
+
+  .odf-grid--vitals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .odf-checkbox-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .odf-field--detail {
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 1fr);
+  }
+
+  .odf-field--detail input {
+    grid-column: 1 / -1;
+  }
+
+  .odf-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .odf-actions > div {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 440px) {
+  .odf-grid--patient,
+  .odf-grid--complaints,
+  .odf-grid--exam,
+  .odf-grid--plans {
+    grid-template-columns: 1fr;
+  }
+
+  .odf-header h1 {
+    font-size: 17px;
+  }
+}
