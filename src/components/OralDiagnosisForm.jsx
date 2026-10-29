@@ -2,6 +2,11 @@ import { useState, useRef } from "react";
 import Tesseract from "tesseract.js";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import { to8DigitId, DEFAULT_CLINICIAN, uploadOdfImageToStorage } from "../lib/dentalService";
+import {
+  analyzeOdfWithAzure,
+  parseAzurePage1ToForm,
+  parseAzurePage2ToForm,
+} from "../lib/azureOdfParser";
 import "./OralDiagnosisForm.css";
 
 // 3-Row x 4-Column Medical Conditions matching CEU Makati ODF Page 1
@@ -341,7 +346,8 @@ export default function OralDiagnosisForm({
   const toggleDictation = (field) => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser. Please use Chrome or Edge.");
+      setOcrProgressText("✕ Speech recognition is not supported in this browser. Please use Chrome or Edge.");
+      setTimeout(() => setOcrProgressText(""), 4500);
       return;
     }
 
@@ -379,10 +385,10 @@ export default function OralDiagnosisForm({
     }
   };
 
-  // OCR & Image Processing for Page 1 (Front: Demographics, Clinical Exam & Odontogram)
+  // OCR/ICR & Image Processing for Page 1 (Front: Demographics, Past History, Clinical Exam & Odontogram)
   const processPage1Image = async (fileOrUrl) => {
     setIsProcessingOcr(true);
-    setOcrProgressText("Analyzing Page 1: Cropping Odontogram block...");
+    setOcrProgressText("Analyzing Page 1: Preparing scan & Odontogram crop...");
 
     try {
       let rawUrl = typeof fileOrUrl === "string" ? fileOrUrl : null;
@@ -392,86 +398,106 @@ export default function OralDiagnosisForm({
         const res = await fetch(fileOrUrl);
         blob = await res.blob();
       } else {
-        rawUrl = await uploadOdfImageToStorage(fileOrUrl, `page1_${form.eightDigitId}_${Date.now()}.jpg`);
+        const ext = fileOrUrl.type === "application/pdf" ? "pdf" : "jpg";
+        rawUrl = await uploadOdfImageToStorage(
+          fileOrUrl,
+          `page1_${form.eightDigitId}_${Date.now()}.${ext}`
+        );
       }
 
-      // 1. Precise Region Cropping: Odontogram Block (Section C)
-      const odontoCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_1_ODONTOGRAM);
-      const odontoCropUrl = await uploadOdfImageToStorage(odontoCrop.blob, `odonto_${form.eightDigitId}.jpg`);
+      // 1. Region Cropping: Odontogram Block (Section C) when input is an image
+      if (blob.type !== "application/pdf") {
+        try {
+          const odontoCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_1_ODONTOGRAM);
+          const odontoCropUrl = await uploadOdfImageToStorage(
+            odontoCrop.blob,
+            `odonto_${form.eightDigitId}.jpg`
+          );
 
-      setForm((prev) => ({
-        ...prev,
-        rawScanUrl: rawUrl || odontoCrop.dataUrl,
-        odontogramCropUrl: odontoCropUrl || odontoCrop.dataUrl,
-      }));
+          setForm((prev) => ({
+            ...prev,
+            rawScanUrl: rawUrl || odontoCrop.dataUrl,
+            odontogramCropUrl: odontoCropUrl || odontoCrop.dataUrl,
+          }));
+        } catch (cropErr) {
+          console.warn("Odontogram crop skipped:", cropErr);
+          if (rawUrl) {
+            setForm((prev) => ({ ...prev, rawScanUrl: rawUrl }));
+          }
+        }
+      } else if (rawUrl) {
+        setForm((prev) => ({ ...prev, rawScanUrl: rawUrl }));
+      }
 
-      // 2. Tesseract OCR for Demographics & Case History
-      setOcrProgressText("Running Optical Character Recognition (OCR)...");
+      // 2. Cloud OCR/ICR via Microsoft Azure AI Document Intelligence (with local fallback)
+      setOcrProgressText("Analyzing Page 1 with Azure AI Document Intelligence...");
+      let usedAzure = false;
+
       try {
-        const ocrResult = await Tesseract.recognize(blob, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizingtext") {
-              setOcrProgressText(`Reading text: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
+        const fileName =
+          typeof fileOrUrl !== "string" && fileOrUrl?.name
+            ? fileOrUrl.name
+            : `page1_${form.eightDigitId}.jpg`;
+        const azureRes = await analyzeOdfWithAzure(blob, 1, fileName);
 
-        const text = ocrResult?.data?.text || "";
-        console.log("OCR extracted text Page 1:", text);
-
-        // Smart field extraction patterns matching CEU ODF layout
-        const nameMatch = text.match(/Name[:\s]+([A-Za-z\s,.-]+)/i);
-        const addressMatch = text.match(/(?:Home\s*Address|Address)[:\s]+([^\n]+)/i);
-        const bdayMatch = text.match(/(?:Birth\s*date|DOB|Birthdate)[:\s]+([0-9/-]+)/i);
-        const ageMatch = text.match(/Age[:\s]+(\d+)/i);
-        const sexMatch = text.match(/Sex[:\s]+(Male|Female|M|F)/i);
-        const htMatch = text.match(/Ht[:\s]+([0-9a-zA-Z\s.-]+)/i);
-        const wtMatch = text.match(/Wt[:\s]+([0-9a-zA-Z\s.-]+)/i);
-        const civilMatch = text.match(/(?:Civil\s*Status|Status)[:\s]+(Single|Married|Widowed|Separated)/i);
-        const telMatch = text.match(/(?:Home\s*Tel(?:\.|\s*No\.?)?)[:\s]+([0-9-+\s()]+)/i);
-        const cellMatch = text.match(/(?:Cell(?:\s*Phone)?(?:\s*No\.?)?)[:\s]+([0-9-+\s()]+)/i);
-        const natMatch = text.match(/Nationality[:\s]+([A-Za-z\s]+)/i);
-        const occMatch = text.match(/Occupation[:\s]+([A-Za-z\s]+)/i);
-        const relMatch = text.match(/Religion[:\s]+([A-Za-z\s]+)/i);
-        const bpMatch = text.match(/(?:BP|Blood\s*Pressure)[:\s]+([\d/]+)/i);
-        const pulseMatch = text.match(/(?:Pulse|Pulse\s*Rate)[:\s]+(\d+)/i);
-
-        setForm((prev) => ({
-          ...prev,
-          name: nameMatch ? nameMatch[1].split("\n")[0].trim() : (prev.name || "John Doe"),
-          homeAddress: addressMatch ? addressMatch[1].split("\n")[0].trim() : prev.homeAddress,
-          birthDate: bdayMatch ? bdayMatch[1].trim() : prev.birthDate,
-          age: ageMatch ? ageMatch[1] : (prev.age || "31"),
-          sex: sexMatch ? (sexMatch[1].toUpperCase().startsWith("F") ? "Female" : "Male") : prev.sex,
-          height: htMatch ? htMatch[1].split("\n")[0].trim() : prev.height,
-          weight: wtMatch ? wtMatch[1].split("\n")[0].trim() : prev.weight,
-          civilStatus: civilMatch ? civilMatch[1] : prev.civilStatus,
-          homeTel: telMatch ? telMatch[1].split("\n")[0].trim() : prev.homeTel,
-          cellPhone: cellMatch ? cellMatch[1].split("\n")[0].trim() : prev.cellPhone,
-          nationality: natMatch ? natMatch[1].split("\n")[0].trim() : prev.nationality,
-          occupation: occMatch ? occMatch[1].split("\n")[0].trim() : prev.occupation,
-          religion: relMatch ? relMatch[1].split("\n")[0].trim() : prev.religion,
-          bloodPressure: bpMatch ? bpMatch[1] : (prev.bloodPressure || "120/80"),
-          pulseRate: pulseMatch ? `${pulseMatch[1]} bpm` : (prev.pulseRate || "72 bpm"),
-        }));
-      } catch (ocrErr) {
-        console.warn("OCR recognition warning:", ocrErr);
+        if (azureRes?.configured) {
+          usedAzure = true;
+          setForm((prev) => {
+            const p1Updates = parseAzurePage1ToForm(azureRes, prev);
+            // If user uploaded a multi-page PDF containing both Page 1 & Page 2, map Page 2 as well
+            const p2Updates =
+              (azureRes.pages?.length || 0) >= 2 ? parseAzurePage2ToForm(azureRes, prev) : {};
+            return {
+              ...prev,
+              ...p1Updates,
+              ...p2Updates,
+            };
+          });
+        }
+      } catch (azureErr) {
+        console.warn("Azure Document Intelligence warning (falling back to local OCR):", azureErr);
       }
 
-      setOcrProgressText("✓ Page 1 processed! Odontogram cropped and form fields pre-filled.");
-      setTimeout(() => setOcrProgressText(""), 5000);
+      // 3. Fallback to local Tesseract OCR if Azure credentials are not yet set in .env
+      if (!usedAzure && blob.type !== "application/pdf") {
+        setOcrProgressText("Running local OCR fallback (configure Azure in .env for cloud ICR)...");
+        try {
+          const ocrResult = await Tesseract.recognize(blob, "eng", {
+            logger: (m) => {
+              if (m.status === "recognizingtext") {
+                setOcrProgressText(`Reading Page 1 text (local fallback): ${Math.round(m.progress * 100)}%`);
+              }
+            },
+          });
+
+          const text = ocrResult?.data?.text || "";
+          setForm((prev) => ({
+            ...prev,
+            ...parseAzurePage1ToForm({ content: text }, prev),
+          }));
+        } catch (ocrErr) {
+          console.warn("Local OCR fallback warning:", ocrErr);
+        }
+      }
+
+      setOcrProgressText(
+        usedAzure
+          ? "✓ Page 1 extracted via Azure Document Intelligence!"
+          : "✓ Page 1 processed (Odontogram cropped & fields extracted)."
+      );
+      setTimeout(() => setOcrProgressText(""), 5500);
     } catch (err) {
       console.error("Page 1 processing failed:", err);
-      setOcrProgressText("✕ Error reading image. Please check format.");
+      setOcrProgressText("✕ Error reading Page 1 scan. Please check file format.");
     } finally {
       setIsProcessingOcr(false);
     }
   };
 
-  // OCR & Image Processing for Page 2 (Back: Diagnostic Tests, Diagnosis, Plan & Consent)
+  // OCR/ICR & Image Processing for Page 2 (Back: Diagnostic Tests, Diagnosis, 9x10 Log & Consent)
   const processPage2Image = async (fileOrUrl) => {
     setIsProcessingOcr(true);
-    setOcrProgressText("Analyzing Page 2: Cropping Consent & Data Privacy block...");
+    setOcrProgressText("Analyzing Page 2: Preparing scan & Consent block crop...");
 
     try {
       let rawUrl = typeof fileOrUrl === "string" ? fileOrUrl : null;
@@ -481,40 +507,89 @@ export default function OralDiagnosisForm({
         const res = await fetch(fileOrUrl);
         blob = await res.blob();
       } else {
-        rawUrl = await uploadOdfImageToStorage(fileOrUrl, `page2_${form.eightDigitId}_${Date.now()}.jpg`);
+        const ext = fileOrUrl.type === "application/pdf" ? "pdf" : "jpg";
+        rawUrl = await uploadOdfImageToStorage(
+          fileOrUrl,
+          `page2_${form.eightDigitId}_${Date.now()}.${ext}`
+        );
       }
 
-      // 1. Precise Region Cropping: Signed Consent & Data Privacy Statement
-      const consentCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_2_CONSENT);
-      const consentCropUrl = await uploadOdfImageToStorage(consentCrop.blob, `consent_${form.eightDigitId}.jpg`);
+      // 1. Region Cropping: Signed Consent & Data Privacy Statement when input is an image
+      if (blob.type !== "application/pdf") {
+        try {
+          const consentCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_2_CONSENT);
+          const consentCropUrl = await uploadOdfImageToStorage(
+            consentCrop.blob,
+            `consent_${form.eightDigitId}.jpg`
+          );
 
-      setForm((prev) => ({
-        ...prev,
-        rawScanPage2Url: rawUrl || consentCrop.dataUrl,
-        consentCropUrl: consentCropUrl || consentCrop.dataUrl,
-      }));
+          setForm((prev) => ({
+            ...prev,
+            rawScanPage2Url: rawUrl || consentCrop.dataUrl,
+            consentCropUrl: consentCropUrl || consentCrop.dataUrl,
+          }));
+        } catch (cropErr) {
+          console.warn("Consent crop skipped:", cropErr);
+          if (rawUrl) {
+            setForm((prev) => ({ ...prev, rawScanPage2Url: rawUrl }));
+          }
+        }
+      } else if (rawUrl) {
+        setForm((prev) => ({ ...prev, rawScanPage2Url: rawUrl }));
+      }
 
-      // 2. OCR text extraction for Page 2
-      setOcrProgressText("Running OCR for Diagnostic Plan & Consent text...");
+      // 2. Cloud OCR/ICR & Table Extraction via Microsoft Azure AI Document Intelligence
+      setOcrProgressText("Analyzing Page 2 tables & handwriting with Azure AI Document Intelligence...");
+      let usedAzure = false;
+
       try {
-        const ocrResult = await Tesseract.recognize(blob, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizingtext") {
-              setOcrProgressText(`Reading Page 2 text: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
-        const text = ocrResult?.data?.text || "";
-        console.log("OCR extracted text Page 2:", text);
-      } catch (ocrErr) {
-        console.warn("OCR Page 2 warning:", ocrErr);
+        const fileName =
+          typeof fileOrUrl !== "string" && fileOrUrl?.name
+            ? fileOrUrl.name
+            : `page2_${form.eightDigitId}.jpg`;
+        const azureRes = await analyzeOdfWithAzure(blob, 2, fileName);
+
+        if (azureRes?.configured) {
+          usedAzure = true;
+          setForm((prev) => ({
+            ...prev,
+            ...parseAzurePage2ToForm(azureRes, prev),
+          }));
+        }
+      } catch (azureErr) {
+        console.warn("Azure Document Intelligence Page 2 warning (falling back to local OCR):", azureErr);
       }
 
-      setOcrProgressText("✓ Page 2 processed! Signed consent block cropped and linked.");
-      setTimeout(() => setOcrProgressText(""), 5000);
+      // 3. Fallback to local Tesseract OCR if Azure credentials are not yet set in .env
+      if (!usedAzure && blob.type !== "application/pdf") {
+        setOcrProgressText("Running local OCR fallback for Page 2...");
+        try {
+          const ocrResult = await Tesseract.recognize(blob, "eng", {
+            logger: (m) => {
+              if (m.status === "recognizingtext") {
+                setOcrProgressText(`Reading Page 2 text (local fallback): ${Math.round(m.progress * 100)}%`);
+              }
+            },
+          });
+          const text = ocrResult?.data?.text || "";
+          setForm((prev) => ({
+            ...prev,
+            ...parseAzurePage2ToForm({ content: text }, prev),
+          }));
+        } catch (ocrErr) {
+          console.warn("Local OCR Page 2 warning:", ocrErr);
+        }
+      }
+
+      setOcrProgressText(
+        usedAzure
+          ? "✓ Page 2 tables & fields extracted via Azure Document Intelligence!"
+          : "✓ Page 2 processed! Signed consent block cropped and linked."
+      );
+      setTimeout(() => setOcrProgressText(""), 5500);
     } catch (err) {
       console.error("Page 2 processing failed:", err);
-      setOcrProgressText("✕ Error processing Page 2 image.");
+      setOcrProgressText("✕ Error processing Page 2 scan.");
     } finally {
       setIsProcessingOcr(false);
     }
