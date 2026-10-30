@@ -289,7 +289,7 @@ async function startServer() {
   app.listen(PORT, "0.0.0.0", () => {
     const { configured, modelId } = isAzureConfigured();
     console.log(
-      `[i-Teeth Server] Running on http://0.0.0.0:${PORT} | Azure Document Intelligence: ${
+      `[i-Teeth Server] Running on http://localhost:${PORT} | Azure Document Intelligence: ${
         configured ? `ACTIVE (${modelId})` : "NOT CONFIGURED (using client OCR fallback)"
       }`
     );

@@ -78,10 +78,10 @@ export default function OralDiagnosisForm({
       homeAddress: initialData?.homeAddress || "",
       birthDate: initialData?.birthDate || initialData?.dateOfBirth || "",
       age: initialData?.age || "",
-      sex: initialData?.sex || initialData?.gender || "Male",
+      sex: initialData?.sex || initialData?.gender || "",
       height: initialData?.height || "",
       weight: initialData?.weight || "",
-      civilStatus: initialData?.civilStatus || "Single",
+      civilStatus: initialData?.civilStatus || "",
       homeTel: initialData?.homeTel || "",
       cellPhone: initialData?.cellPhone || initialData?.phone || "",
       nationality: initialData?.nationality || "Filipino",
@@ -801,9 +801,6 @@ export default function OralDiagnosisForm({
               <div className="ceu-paper-sheet ceu-paper-sheet--page1">
                 {/* Official University Header */}
                 <header className="ceu-official-header">
-                  <div className="ceu-official-header__crest">
-                    <div className="ceu-crest-circle">CEU</div>
-                  </div>
                   <div className="ceu-official-header__text">
                     <h1>CENTRO ESCOLAR UNIVERSITY</h1>
                     <h2>School of Dentistry</h2>
@@ -850,10 +847,11 @@ export default function OralDiagnosisForm({
                     <div className="ceu-field ceu-field--birthdate">
                       <span className="ceu-label">Birthdate:</span>
                       <input
-                        type="date"
+                        type="text"
                         className="ceu-line-input"
                         value={form.birthDate}
                         onChange={(e) => updateField("birthDate", e.target.value)}
+                        placeholder="MM/DD/YYYY"
                       />
                     </div>
                     <div className="ceu-field ceu-field--age">
@@ -868,14 +866,13 @@ export default function OralDiagnosisForm({
                     </div>
                     <div className="ceu-field ceu-field--sex">
                       <span className="ceu-label">Sex:</span>
-                      <select
+                      <input
+                        type="text"
                         className="ceu-line-input"
                         value={form.sex}
                         onChange={(e) => updateField("sex", e.target.value)}
-                      >
-                        <option value="Male">M</option>
-                        <option value="Female">F</option>
-                      </select>
+                        placeholder="M / F"
+                      />
                     </div>
                     <div className="ceu-field ceu-field--ht">
                       <span className="ceu-label">Ht:</span>
@@ -899,16 +896,12 @@ export default function OralDiagnosisForm({
                     </div>
                     <div className="ceu-field ceu-field--civil-status">
                       <span className="ceu-label">Civil Status:</span>
-                      <select
+                      <input
+                        type="text"
                         className="ceu-line-input"
                         value={form.civilStatus}
                         onChange={(e) => updateField("civilStatus", e.target.value)}
-                      >
-                        <option>Single</option>
-                        <option>Married</option>
-                        <option>Widowed</option>
-                        <option>Separated</option>
-                      </select>
+                      />
                     </div>
                   </div>
 

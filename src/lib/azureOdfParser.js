@@ -201,7 +201,9 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
 
   const birthDate =
     lookupValue(fields, kvPairs, ["BirthDate", "Birthdate", "DateOfBirth", "DOB"]) ||
-    cleanExtractedText(text.match(/(?:Birth\s*date|Birthdate|DOB)[:\s]+([0-9/\-.]+)/i)?.[1]);
+    cleanExtractedText(
+      text.match(/(?:Birth\s*date|Birthdate|DOB)[:\s]+([^\n]+?)(?:\s+\bAge\b|\n|$)/i)?.[1]
+    );
   if (birthDate) updates.birthDate = birthDate;
 
   const age =
@@ -211,9 +213,11 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
 
   const rawSex =
     lookupValue(fields, kvPairs, ["Sex", "Gender"]) ||
-    cleanExtractedText(text.match(/\bSex[:\s]+(Male|Female|M|F)\b/i)?.[1]);
+    cleanExtractedText(
+      text.match(/\bSex[:\s]+([^\n]+?)(?:\s+\bHt\.?\b|\s+\bHeight\b|\n|$)/i)?.[1]
+    );
   if (rawSex) {
-    updates.sex = rawSex.toUpperCase().startsWith("F") ? "Female" : "Male";
+    updates.sex = rawSex;
   }
 
   const height =
@@ -228,12 +232,11 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
 
   const rawCivil =
     lookupValue(fields, kvPairs, ["CivilStatus", "Status"]) ||
-    cleanExtractedText(text.match(/(?:Civil\s*Status)[:\s]+(Single|Married|Widowed|Separated)/i)?.[1]);
-  if (rawCivil) {
-    const matchedStatus = ["Single", "Married", "Widowed", "Separated"].find(
-      (s) => s.toLowerCase() === rawCivil.toLowerCase()
+    cleanExtractedText(
+      text.match(/(?:Civil\s*Status)[:\s]+([^\n]+?)(?:\s+Home\s*Tel|\n|$)/i)?.[1]
     );
-    if (matchedStatus) updates.civilStatus = matchedStatus;
+  if (rawCivil) {
+    updates.civilStatus = rawCivil;
   }
 
   const homeTel =

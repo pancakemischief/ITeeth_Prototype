@@ -525,8 +525,8 @@
 }
 
 .ceu-field--sex {
-  flex: 0 0 65px;
-  min-width: 55px;
+  flex: 0.7 1 90px;
+  min-width: 75px;
 }
 
 .ceu-field--ht {
