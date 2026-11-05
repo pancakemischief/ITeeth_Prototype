@@ -7,10 +7,10 @@ export const ODF_CROP_PRESETS = {
   // Page 1: "C. Mouth Examination" (Odontogram with permanent & deciduous dentition)
   PAGE_1_ODONTOGRAM: {
     name: "Odontogram (Mouth Examination)",
-    xPercent: 0.04,
-    yPercent: 0.52,
-    widthPercent: 0.92,
-    heightPercent: 0.43,
+    xPercent: 0.03,
+    yPercent: 0.535,
+    widthPercent: 0.94,
+    heightPercent: 0.455,
   },
   // Page 2: "Data Privacy Act Statement Policy & Dental Procedure Consent Form"
   PAGE_2_CONSENT: {

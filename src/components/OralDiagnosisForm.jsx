@@ -126,14 +126,25 @@ export default function OralDiagnosisForm({
       localAnesthesiaAllergy: initialData?.localAnesthesiaAllergy || "None",
       denture: initialData?.denture || "None",
       dentureSinceWhen: initialData?.dentureSinceWhen || "",
+      dentureUpperCheck: initialData?.dentureUpperCheck || false,
+      dentureUpperNone: initialData?.dentureUpperNone || false,
+      dentureUpperType: initialData?.dentureUpperType || initialData?.dentureUpper || "",
+      dentureUpperSince: initialData?.dentureUpperSince || "",
+      dentureLowerCheck: initialData?.dentureLowerCheck || false,
+      dentureLowerNone: initialData?.dentureLowerNone || false,
+      dentureLowerType: initialData?.dentureLowerType || initialData?.dentureLower || "",
+      dentureLowerSince: initialData?.dentureLowerSince || "",
 
-      // Clinical Exam - Extraoral
-      head: initialData?.head || "Normal",
-      headSpecify: initialData?.headSpecify || "",
-      tmj: initialData?.tmj || "Normal",
-      tmjSpecify: initialData?.tmjSpecify || "",
-      eyes: initialData?.eyes || "Normal",
-      eyesSpecify: initialData?.eyesSpecify || "",
+      // Clinical Exam - Extraoral (Free text with blanks: ___ Normal ___ Abnormal, specify ___)
+      head: initialData?.head || "",
+      headNormal: initialData?.headNormal !== undefined ? initialData.headNormal : (initialData?.head === "Normal" ? "/" : ""),
+      headAbnormalSpecify: initialData?.headAbnormalSpecify || initialData?.headSpecify || (initialData?.head === "Abnormal" ? "Abnormal" : ""),
+      tmj: initialData?.tmj || "",
+      tmjNormal: initialData?.tmjNormal !== undefined ? initialData.tmjNormal : (initialData?.tmj === "Normal" ? "/" : ""),
+      tmjAbnormalSpecify: initialData?.tmjAbnormalSpecify || initialData?.tmjSpecify || (initialData?.tmj === "Abnormal" ? "Abnormal" : ""),
+      eyes: initialData?.eyes || "",
+      eyesNormal: initialData?.eyesNormal !== undefined ? initialData.eyesNormal : (initialData?.eyes === "Normal" ? "/" : ""),
+      eyesAbnormalSpecify: initialData?.eyesAbnormalSpecify || initialData?.eyesSpecify || (initialData?.eyes === "Abnormal" ? "Abnormal" : ""),
 
       // Vital Signs
       bloodPressure: initialData?.bloodPressure || "",
@@ -1129,7 +1140,7 @@ export default function OralDiagnosisForm({
 
                   {/* Dental History Underlines */}
                   <div className="ceu-dental-history-grid">
-                    <div className="ceu-form-row">
+                    <div className="ceu-form-row" style={{ marginBottom: "8px" }}>
                       <div className="ceu-field ceu-field--inline">
                         <span className="ceu-label">Previous Extraction:</span>
                         <select
@@ -1142,41 +1153,99 @@ export default function OralDiagnosisForm({
                         </select>
                       </div>
                       <div className="ceu-field ceu-field--grow">
-                        <span className="ceu-label">When:</span>
+                        <span className="ceu-label">If yes when?</span>
                         <input
                           type="text"
                           className="ceu-line-input"
                           value={form.extractionWhen}
                           onChange={(e) => updateField("extractionWhen", e.target.value)}
-                          placeholder="Month/Year"
+                          placeholder="Month/Year or Date"
                         />
                       </div>
                     </div>
 
-                    <div className="ceu-form-row">
-                      <div className="ceu-field ceu-field--inline">
-                        <span className="ceu-label">Denture:</span>
-                        <select
-                          className="ceu-line-input ceu-line-input--inline"
-                          value={form.denture}
-                          onChange={(e) => updateField("denture", e.target.value)}
-                        >
-                          <option>None</option>
-                          <option>Full Upper</option>
-                          <option>Full Lower</option>
-                          <option>Complete</option>
-                          <option>Partial (RPD)</option>
-                        </select>
+                    {/* Denture Section: Upper above, Lower below, both with checkbox before Upper and Lower, Type____ and since____ */}
+                    <div className="ceu-denture-block" style={{ borderTop: "1px dashed #cbd5e1", paddingTop: "8px" }}>
+                      <div className="ceu-denture-row" style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap", marginBottom: "6px" }}>
+                        <span className="ceu-label" style={{ minWidth: "60px" }}>Denture:</span>
+                        
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", cursor: "pointer", marginRight: "6px" }}>
+                          <input
+                            type="checkbox"
+                            checked={form.dentureUpperNone}
+                            onChange={(e) => updateField("dentureUpperNone", e.target.checked)}
+                          />
+                          <span>None</span>
+                        </label>
+
+                        <div className="ceu-field" style={{ flex: "1 1 210px", display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
+                          <input
+                            type="checkbox"
+                            checked={form.dentureUpperCheck}
+                            onChange={(e) => updateField("dentureUpperCheck", e.target.checked)}
+                            title="Select Upper Denture"
+                          />
+                          <span className="ceu-label">Upper: Type</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            value={form.dentureUpperType}
+                            onChange={(e) => updateField("dentureUpperType", e.target.value)}
+                            placeholder="Full / Partial / —"
+                          />
+                        </div>
+
+                        <div className="ceu-field" style={{ flex: "1 1 180px" }}>
+                          <span className="ceu-label">since</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            value={form.dentureUpperSince}
+                            onChange={(e) => updateField("dentureUpperSince", e.target.value)}
+                            placeholder="Duration or Date"
+                          />
+                        </div>
                       </div>
-                      <div className="ceu-field ceu-field--grow">
-                        <span className="ceu-label">Since when:</span>
-                        <input
-                          type="text"
-                          className="ceu-line-input"
-                          value={form.dentureSinceWhen}
-                          onChange={(e) => updateField("dentureSinceWhen", e.target.value)}
-                          placeholder="Month/Year or Duration"
-                        />
+
+                      <div className="ceu-denture-row" style={{ display: "flex", alignItems: "baseline", gap: "10px", flexWrap: "wrap" }}>
+                        <span style={{ minWidth: "60px" }}></span>
+                        
+                        <label style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "11.5px", cursor: "pointer", marginRight: "6px" }}>
+                          <input
+                            type="checkbox"
+                            checked={form.dentureLowerNone}
+                            onChange={(e) => updateField("dentureLowerNone", e.target.checked)}
+                          />
+                          <span>None</span>
+                        </label>
+
+                        <div className="ceu-field" style={{ flex: "1 1 210px", display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
+                          <input
+                            type="checkbox"
+                            checked={form.dentureLowerCheck}
+                            onChange={(e) => updateField("dentureLowerCheck", e.target.checked)}
+                            title="Select Lower Denture"
+                          />
+                          <span className="ceu-label">Lower: Type</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            value={form.dentureLowerType}
+                            onChange={(e) => updateField("dentureLowerType", e.target.value)}
+                            placeholder="Full / Partial / —"
+                          />
+                        </div>
+
+                        <div className="ceu-field" style={{ flex: "1 1 180px" }}>
+                          <span className="ceu-label">since</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            value={form.dentureLowerSince}
+                            onChange={(e) => updateField("dentureLowerSince", e.target.value)}
+                            placeholder="Duration or Date"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1188,72 +1257,129 @@ export default function OralDiagnosisForm({
                     <h4>II. CLINICAL EXAMINATION</h4>
                   </div>
 
-                  {/* Extraoral & Vitals */}
+                  {/* Extraoral: TMJ below Head, Eyes beside them, all free-text blanks */}
                   <div className="ceu-subheading">
                     <strong>A. Extraoral:</strong>
                   </div>
-                  <div className="ceu-exam-grid">
-                    <div className="ceu-field ceu-field--inline">
-                      <span className="ceu-label">Head:</span>
-                      <select
-                        className="ceu-line-input"
-                        value={form.head}
-                        onChange={(e) => updateField("head", e.target.value)}
-                      >
-                        <option>Normal</option>
-                        <option>Abnormal</option>
-                      </select>
-                      {form.head === "Abnormal" && (
-                        <input
-                          type="text"
-                          className="ceu-line-input ceu-line-input--specify"
-                          placeholder="Specify findings"
-                          value={form.headSpecify}
-                          onChange={(e) => updateField("headSpecify", e.target.value)}
-                        />
-                      )}
+                  <div className="ceu-extraoral-grid" style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
+                    {/* Row 1: Head on the left, Eyes on the right */}
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", alignItems: "baseline" }}>
+                      {/* Head Field */}
+                      <div style={{ flex: "1 1 360px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "48px" }}>Head:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.headNormal}
+                            onChange={(e) => updateField("headNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
+
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.head}
+                            onChange={(e) => updateField("head", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.headAbnormalSpecify}
+                            onChange={(e) => updateField("headAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Eyes Field beside Head */}
+                      <div style={{ flex: "1 1 340px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "45px" }}>Eyes:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.eyesNormal}
+                            onChange={(e) => updateField("eyesNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
+
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.eyes}
+                            onChange={(e) => updateField("eyes", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.eyesAbnormalSpecify}
+                            onChange={(e) => updateField("eyesAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="ceu-field ceu-field--inline">
-                      <span className="ceu-label">TMJ:</span>
-                      <select
-                        className="ceu-line-input"
-                        value={form.tmj}
-                        onChange={(e) => updateField("tmj", e.target.value)}
-                      >
-                        <option>Normal</option>
-                        <option>Abnormal</option>
-                      </select>
-                      {form.tmj === "Abnormal" && (
-                        <input
-                          type="text"
-                          className="ceu-line-input ceu-line-input--specify"
-                          placeholder="Clicking / deviation"
-                          value={form.tmjSpecify}
-                          onChange={(e) => updateField("tmjSpecify", e.target.value)}
-                        />
-                      )}
-                    </div>
+                    {/* Row 2: TMJ below Head */}
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", alignItems: "baseline" }}>
+                      <div style={{ flex: "1 1 360px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "48px" }}>TMJ:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.tmjNormal}
+                            onChange={(e) => updateField("tmjNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
 
-                    <div className="ceu-field ceu-field--inline">
-                      <span className="ceu-label">Eyes:</span>
-                      <select
-                        className="ceu-line-input"
-                        value={form.eyes}
-                        onChange={(e) => updateField("eyes", e.target.value)}
-                      >
-                        <option>Normal</option>
-                        <option>Abnormal</option>
-                      </select>
-                      {form.eyes === "Abnormal" && (
-                        <input
-                          type="text"
-                          className="ceu-line-input ceu-line-input--specify"
-                          placeholder="Specify"
-                          value={form.eyesSpecify}
-                          onChange={(e) => updateField("eyesSpecify", e.target.value)}
-                        />
-                      )}
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.tmj}
+                            onChange={(e) => updateField("tmj", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.tmjAbnormalSpecify}
+                            onChange={(e) => updateField("tmjAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+                      </div>
+                      <div style={{ flex: "1 1 340px" }}></div>
                     </div>
                   </div>
 
