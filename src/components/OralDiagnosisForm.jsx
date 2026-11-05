@@ -1257,11 +1257,16 @@ export default function OralDiagnosisForm({
                     <h4>II. CLINICAL EXAMINATION</h4>
                   </div>
 
+<<<<<<< HEAD
                   {/* Extraoral: Head, TMJ, and Eyes below TMJ */}
+=======
+                  {/* Extraoral: TMJ below Head, Eyes beside them, all free-text blanks */}
+>>>>>>> a210b757025421c1f865359e0c4a9e7d2282f397
                   <div className="ceu-subheading">
                     <strong>A. Extraoral:</strong>
                   </div>
                   <div className="ceu-extraoral-grid" style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
+<<<<<<< HEAD
                     {/* Row 1: Head */}
                     <div style={{ display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
                       <span className="ceu-label" style={{ minWidth: "48px" }}>Head:</span>
@@ -1297,10 +1302,89 @@ export default function OralDiagnosisForm({
                           onChange={(e) => updateField("headAbnormalSpecify", e.target.value)}
                           placeholder="N/A"
                         />
+=======
+                    {/* Row 1: Head on the left, Eyes on the right */}
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", alignItems: "baseline" }}>
+                      {/* Head Field */}
+                      <div style={{ flex: "1 1 360px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "48px" }}>Head:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.headNormal}
+                            onChange={(e) => updateField("headNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
+
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.head}
+                            onChange={(e) => updateField("head", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.headAbnormalSpecify}
+                            onChange={(e) => updateField("headAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Eyes Field beside Head */}
+                      <div style={{ flex: "1 1 340px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "45px" }}>Eyes:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.eyesNormal}
+                            onChange={(e) => updateField("eyesNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
+
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.eyes}
+                            onChange={(e) => updateField("eyes", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.eyesAbnormalSpecify}
+                            onChange={(e) => updateField("eyesAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+>>>>>>> a210b757025421c1f865359e0c4a9e7d2282f397
                       </div>
                     </div>
 
                     {/* Row 2: TMJ below Head */}
+<<<<<<< HEAD
                     <div style={{ display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
                       <span className="ceu-label" style={{ minWidth: "48px" }}>TMJ:</span>
                       <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
@@ -1374,6 +1458,46 @@ export default function OralDiagnosisForm({
                           placeholder="N/A"
                         />
                       </div>
+=======
+                    <div style={{ display: "flex", gap: "18px", flexWrap: "wrap", alignItems: "baseline" }}>
+                      <div style={{ flex: "1 1 360px", display: "flex", alignItems: "baseline", gap: "6px", flexWrap: "wrap" }}>
+                        <span className="ceu-label" style={{ minWidth: "48px" }}>TMJ:</span>
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.tmjNormal}
+                            onChange={(e) => updateField("tmjNormal", e.target.value)}
+                            placeholder="/"
+                            title="Mark (/) or (X) for Normal"
+                          />
+                          <span style={{ fontSize: "11.5px" }}>Normal</span>
+                        </div>
+
+                        <div style={{ display: "inline-flex", alignItems: "baseline", gap: "4px", flex: "1 1 180px" }}>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ width: "36px", textAlign: "center" }}
+                            value={form.tmj}
+                            onChange={(e) => updateField("tmj", e.target.value)}
+                            placeholder="X"
+                            title="Mark for Abnormal"
+                          />
+                          <span style={{ fontSize: "11.5px", whiteSpace: "nowrap" }}>Abnormal, specify</span>
+                          <input
+                            type="text"
+                            className="ceu-line-input"
+                            style={{ flex: "1 1 100px" }}
+                            value={form.tmjAbnormalSpecify}
+                            onChange={(e) => updateField("tmjAbnormalSpecify", e.target.value)}
+                            placeholder="N/A"
+                          />
+                        </div>
+                      </div>
+                      <div style={{ flex: "1 1 340px" }}></div>
+>>>>>>> a210b757025421c1f865359e0c4a9e7d2282f397
                     </div>
                   </div>
 
