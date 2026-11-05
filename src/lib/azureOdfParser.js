@@ -412,11 +412,7 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // Pattern 1: Mark immediately before the condition name, e.g. "[X] Asthma", "/ Asthma", "X Asthma", "✓ Asthma"
       const rxBefore = new RegExp(
-<<<<<<< HEAD
         `(?:^|\\s|[|\\[(<{])([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)(?:\\s*[\])>}])?\\s+${escaped}`,
-=======
-        `(?:^|\\s|[|\\[(])([/xX✓✔✗✕✖✘|\\-\\\\])(?:\\s*[\\])])?\\s+${escaped}`,
->>>>>>> a210b757025421c1f865359e0c4a9e7d2282f397
         "i"
       );
       const mBefore = searchBlock.match(rxBefore);
@@ -431,11 +427,7 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
 
       // Pattern 2: Mark immediately after the condition name, e.g. "Asthma /", "Asthma [X]", "Asthma: X"
       const rxAfter = new RegExp(
-<<<<<<< HEAD
         `${escaped}\\s*[:\\-]?\\s*[\\[(<{]?\\s*([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)\\s*[\])>}]?`,
-=======
-        `${escaped}\\s*[:\\-]?\\s*[\\[(]?\\s*([/xX✓✔✗✕✖✘|\\-\\\\])\\s*[\\])]?`,
->>>>>>> a210b757025421c1f865359e0c4a9e7d2282f397
         "i"
       );
       const mAfter = searchBlock.match(rxAfter);
