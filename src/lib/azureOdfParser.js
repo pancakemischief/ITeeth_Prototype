@@ -70,7 +70,11 @@ function normalizeKey(str) {
 
 function cleanExtractedText(val) {
   if (val === null || val === undefined) return "";
-  return String(val)
+  const s = String(val).trim();
+  if (/^:?(selected|unselected):?$/i.test(s)) {
+    return s.toLowerCase().includes("unselected") ? "unselected" : "selected";
+  }
+  return s
     .replace(/^[:\s\-_]+/, "")
     .replace(/[\s_]+$/, "")
     .replace(/:selected:|:unselected:/gi, "")
@@ -87,21 +91,28 @@ export function interpretCeuHistoryMark(rawVal) {
   const s = String(rawVal).trim();
   if (!s) return null;
 
-  // Explicit slash or checkmark -> condition present
-  if (/^(\/|✓|✔|check|present|yes|positive|\+)$/i.test(s)) {
+  // 1. Explicit slash, checkmark, or positive keywords / selection states
+  if (/^(\/|✓|✔|check|checked|present|yes|positive|\+|selected|:selected:|true)$/i.test(s)) {
     return "present";
   }
-  // Explicit X or cross -> condition absent ("none")
-  if (/^(x|✕|✖|✗|✘|none|no|negative|-)$/i.test(s)) {
+
+  // 2. Single-stroke characters commonly produced by OCR/ICR for handwritten slashes:
+  // "|", "\", "1", "I", "l", "!" when appearing standalone or inside brackets/parentheses e.g. [1], (/), (|), (1), [/]
+  if (/^[(\s[<{]*(\/|\\|\||1|I|l|!|✓|✔|selected|:selected:)[)\s\]>}]*$/i.test(s)) {
+    return "present";
+  }
+
+  // 3. Explicit X, cross, or negative marks / unselected states
+  if (/^(x|✕|✖|✗|✘|none|no|negative|-|unselected|:unselected:|false)$/i.test(s)) {
+    return "none";
+  }
+  if (/^[(\s[<{]*[xX✕✖✗✘][)\s\]>}]*$/.test(s)) {
     return "none";
   }
 
-  // Handle cases where OCR reads "[ / ]" or "(X)" around the mark
-  if (/\//.test(s) && !/[a-z0-9]{2,}/i.test(s)) {
+  // 4. Any token containing slash, backslash, checkmark, or vertical pipe with no alphabetic text
+  if (/[\/\\|✓✔]/.test(s) && !/[a-z0-9]{2,}/i.test(s)) {
     return "present";
-  }
-  if (/^[(\s[]*[xX][)\s\]]*$/.test(s)) {
-    return "none";
   }
 
   return null;
@@ -269,17 +280,50 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
   // --- 2. Case History (Chief Complaints & HPI) ---
   const updatedComplaints = [...(prevForm.chiefComplaints || ["", "", "", ""])];
   let hasComplaintUpdate = false;
+
+  // 2a. Direct fields or KV pairs
   for (let i = 0; i < 4; i++) {
     const cVal = lookupValue(fields, kvPairs, [
       `ChiefComplaint${i + 1}`,
       `Complaint${i + 1}`,
       `ChiefComplaints_${i + 1}`,
+      `ChiefComplaint_${i + 1}`,
+      `ChiefComplaintLine${i + 1}`,
     ]);
     if (cVal) {
       updatedComplaints[i] = cVal;
       hasComplaintUpdate = true;
     }
   }
+
+  // 2b. Regex extraction from full text if numbered lines (1. ... 2. ... 3. ... 4. ...)
+  // e.g. "1. Crooked teeth\n2. Pain in lower left area\n3. N/A\n4. Masakit gums"
+  const ccSectionMatch = text.match(
+    /(?:Chief\s*Complaint(?:\/s|s)?[:\s]*)([\s\S]*?)(?:(?:B\.?\s*)?History\s+of\s+Present\s+Illness|C\.?\s*Past\s+History|$)/i
+  );
+  const ccBlock = ccSectionMatch ? ccSectionMatch[1] : text;
+
+  for (let num = 1; num <= 4; num++) {
+    // Only try text parsing if not already found via high-precision field
+    if (!updatedComplaints[num - 1]) {
+      const nextNum = num + 1;
+      const rx = new RegExp(
+        `(?:^|\\n)\\s*${num}\\.?\\s*([^\n]+?)(?=(?:\\n\\s*${nextNum}\\.|$|\\n\\s*[B-Z]\\.|History\\s+of))`,
+        "i"
+      );
+      const match = ccBlock.match(rx);
+      if (match && cleanExtractedText(match[1])) {
+        const val = cleanExtractedText(match[1]);
+        // Do not take headers by mistake
+        if (!/^(Chief|Case|History)/i.test(val)) {
+          updatedComplaints[num - 1] = val;
+          hasComplaintUpdate = true;
+        }
+      }
+    }
+  }
+
+  // Fallback single block if numbers were not detected
   if (!hasComplaintUpdate) {
     const singleComplaint = lookupValue(fields, kvPairs, ["ChiefComplaint", "ChiefComplaints"]);
     if (singleComplaint) {
@@ -316,24 +360,37 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
     }
   }
 
-  // 3b. Check tables detected by prebuilt-layout for Past History cells (e.g. "[/] Asthma" or adjacent cell "/" / "X")
+  // 3b. Check tables detected by prebuilt-layout for Past History cells
+  // Azure tables can structure the 3x4 grid in various ways (cells with label, adjacent mark cell, etc.)
   for (const table of tables) {
-    for (const row of table.rows || []) {
+    const tableRows = table.rows || [];
+    for (let r = 0; r < tableRows.length; r++) {
+      const row = tableRows[r];
       for (let c = 0; c < row.length; c++) {
         const cellText = row[c] || "";
         if (!cellText) continue;
+
         for (const cond of PAST_HISTORY_CONDITIONS) {
           const matchesCond = cond.aliases.some((alias) =>
             cellText.toLowerCase().includes(alias.toLowerCase())
           );
           if (matchesCond) {
-            // Check prefix/suffix in same cell (e.g. "/ Asthma" or "X Asthma") or preceding/following cell
+            // Check mark inside the exact same cell (e.g. "[X] Rheumatic Heart Disease" or "/ Asthma")
             const prefixToken = cellText
               .replace(new RegExp(cond.aliases.join("|"), "ig"), "")
               .trim();
             const markFromSameCell = interpretCeuHistoryMark(prefixToken);
+
+            // Check preceding cell in the same row
             const markFromPrevCell = c > 0 ? interpretCeuHistoryMark(row[c - 1]) : null;
-            const mark = markFromSameCell || markFromPrevCell;
+
+            // Check following cell in the same row
+            const markFromNextCell = c + 1 < row.length ? interpretCeuHistoryMark(row[c + 1]) : null;
+
+            // Check row above or below if table is formatted vertically
+            const markFromCellAbove = r > 0 && tableRows[r - 1]?.[c] ? interpretCeuHistoryMark(tableRows[r - 1][c]) : null;
+
+            const mark = markFromSameCell || markFromPrevCell || markFromNextCell || markFromCellAbove;
             if (mark) {
               updatedPastHistory[cond.id] = mark;
               pastHistoryChanged = true;
@@ -344,15 +401,38 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
     }
   }
 
-  // 3c. Fallback regex scan on raw OCR lines for `[/] Condition` or `X Condition`
+  // 3c. Scanning raw OCR lines/text specifically in the C. Past History block
+  const pastHistoryBlockMatch = text.match(
+    /(?:C\.?\s*Past\s+History[\s\S]*?)([\s\S]*?)(?:(?:Dental:?|Previous\s*Extraction|Clinical\s*Examination|II\.?\s*Clinical)|$)/i
+  );
+  const searchBlock = pastHistoryBlockMatch ? pastHistoryBlockMatch[1] : text;
+
   for (const cond of PAST_HISTORY_CONDITIONS) {
-    if (updatedPastHistory[cond.id] && pastHistoryChanged) continue;
     for (const alias of cond.aliases) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const rx = new RegExp(`(?:^|\\s)([/xX✓✔✗])\\s*${escaped}`, "i");
-      const m = text.match(rx);
-      if (m?.[1]) {
-        const interpreted = interpretCeuHistoryMark(m[1]);
+      // Pattern 1: Mark immediately before the condition name, e.g. "[X] Asthma", "/ Asthma", "X Asthma", "✓ Asthma"
+      const rxBefore = new RegExp(
+        `(?:^|\\s|[|\\[(<{])([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)(?:\\s*[\])>}])?\\s+${escaped}`,
+        "i"
+      );
+      const mBefore = searchBlock.match(rxBefore);
+      if (mBefore?.[1]) {
+        const interpreted = interpretCeuHistoryMark(mBefore[1]);
+        if (interpreted) {
+          updatedPastHistory[cond.id] = interpreted;
+          pastHistoryChanged = true;
+          break;
+        }
+      }
+
+      // Pattern 2: Mark immediately after the condition name, e.g. "Asthma /", "Asthma [X]", "Asthma: X"
+      const rxAfter = new RegExp(
+        `${escaped}\\s*[:\\-]?\\s*[\\[(<{]?\\s*([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)\\s*[\])>}]?`,
+        "i"
+      );
+      const mAfter = searchBlock.match(rxAfter);
+      if (mAfter?.[1]) {
+        const interpreted = interpretCeuHistoryMark(mAfter[1]);
         if (interpreted) {
           updatedPastHistory[cond.id] = interpreted;
           pastHistoryChanged = true;
@@ -396,20 +476,105 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
     cleanExtractedText(text.match(/Medications\s+currently\s+taking[:\s]+([^\n]+)/i)?.[1]);
   if (medications) updates.medications = medications;
 
-  // --- 4. Dental History ---
+  // --- 4. Dental History (Previous Extraction & Separated Upper/Lower Denture) ---
   const prevExt = lookupValue(fields, kvPairs, ["PreviousExtraction"]);
   if (prevExt) {
     updates.previousExtraction = /^y/i.test(prevExt) ? "Yes" : "No";
+  } else {
+    // Check line for "Previous Extraction: / Yes X No"
+    const prevExtMatch = text.match(/Previous\s*Extraction[:\s]*([^\n]+)/i);
+    if (prevExtMatch) {
+      const line = prevExtMatch[1];
+      if (/([/✓✔]\s*Yes|Yes\s*[/✓✔]|X\s*No)/i.test(line) && !/([/✓✔]\s*No)/i.test(line)) {
+        updates.previousExtraction = "Yes";
+      } else if (/([/✓✔]\s*No|No\s*[/✓✔]|X\s*Yes)/i.test(line)) {
+        updates.previousExtraction = "No";
+      }
+    }
   }
-  const extWhen = lookupValue(fields, kvPairs, ["ExtractionWhen", "IfYesWhen"]);
+
+  const extWhen =
+    lookupValue(fields, kvPairs, ["ExtractionWhen", "IfYesWhen"]) ||
+    cleanExtractedText(text.match(/(?:If\s*yes\s*when\??|When)[:\s]+([^\n]+?)(?:\s+Denture|\n|$)/i)?.[1]);
   if (extWhen) updates.extractionWhen = extWhen;
 
-  const denture = lookupValue(fields, kvPairs, ["Denture"]);
-  if (denture) updates.denture = denture;
-  const dentureSince = lookupValue(fields, kvPairs, ["DentureSinceWhen", "SinceWhen"]);
-  if (dentureSince) updates.dentureSinceWhen = dentureSince;
+  // Upper Denture
+  const dentureUpperType =
+    lookupValue(fields, kvPairs, ["DentureUpperType", "UpperDentureType", "UpperType"]) ||
+    cleanExtractedText(
+      text.match(/Upper[:\s]+Type[:\s_]*([A-Za-z0-9\s/]+?)(?:\s+since|\n|$)/i)?.[1]
+    );
+  if (dentureUpperType) updates.dentureUpperType = dentureUpperType;
 
-  // --- 5. Vital Signs ---
+  const dentureUpperSince =
+    lookupValue(fields, kvPairs, ["DentureUpperSince", "UpperDentureSince", "UpperSince"]) ||
+    cleanExtractedText(
+      text.match(/Upper[^\n]*?since[:\s_]*([^\n]+?)(?:\s+Lower|\n|$)/i)?.[1]
+    );
+  if (dentureUpperSince) updates.dentureUpperSince = dentureUpperSince;
+
+  // Lower Denture
+  const dentureLowerType =
+    lookupValue(fields, kvPairs, ["DentureLowerType", "LowerDentureType", "LowerType"]) ||
+    cleanExtractedText(
+      text.match(/Lower[:\s]+Type[:\s_]*([A-Za-z0-9\s/]+?)(?:\s+since|\n|$)/i)?.[1]
+    );
+  if (dentureLowerType) updates.dentureLowerType = dentureLowerType;
+
+  const dentureLowerSince =
+    lookupValue(fields, kvPairs, ["DentureLowerSince", "LowerDentureSince", "LowerSince"]) ||
+    cleanExtractedText(
+      text.match(/Lower[^\n]*?since[:\s_]*([^\n]+?)(?:\s+I\s*certify|\s+Clinical|\n|$)/i)?.[1]
+    );
+  if (dentureLowerSince) updates.dentureLowerSince = dentureLowerSince;
+
+  // Overall Denture checkmark / type legacy compatibility
+  const generalDenture = lookupValue(fields, kvPairs, ["Denture"]);
+  if (generalDenture) updates.denture = generalDenture;
+  if (dentureUpperType || dentureLowerType) {
+    updates.denture = `${dentureUpperType ? `Upper: ${dentureUpperType}` : ""}${
+      dentureLowerType ? ` Lower: ${dentureLowerType}` : ""
+    }`.trim();
+  }
+
+  // --- 5. Clinical Examination - Extraoral (Head, TMJ, Eyes) ---
+  const extractExtraoral = (keyName) => {
+    const rx = new RegExp(
+      `${keyName}[:\\s]+([/xX✓✔✗✕✖✘|\\-\\\\])?\\s*Normal\\s*([/xX✓✔✗✕✖✘|\\-\\\\])?\\s*(?:Abnormal,?\\s*specify[:\\s_]*)?([A-Za-z0-9/\\-\\s.]+)?`,
+      "i"
+    );
+    const m = text.match(rx);
+    if (m) {
+      const normalMark = m[1] || "";
+      const abnormalMark = m[2] || "";
+      const specifyText = cleanExtractedText(m[3] || "");
+      return { normalMark, abnormalMark, specifyText };
+    }
+    return null;
+  };
+
+  const headExt = extractExtraoral("Head");
+  if (headExt) {
+    if (headExt.normalMark) updates.headNormal = headExt.normalMark;
+    if (headExt.abnormalMark) updates.head = headExt.abnormalMark;
+    if (headExt.specifyText) updates.headAbnormalSpecify = headExt.specifyText;
+  }
+
+  const tmjExt = extractExtraoral("TMJ");
+  if (tmjExt) {
+    if (tmjExt.normalMark) updates.tmjNormal = tmjExt.normalMark;
+    if (tmjExt.abnormalMark) updates.tmj = tmjExt.abnormalMark;
+    if (tmjExt.specifyText) updates.tmjAbnormalSpecify = tmjExt.specifyText;
+  }
+
+  const eyesExt = extractExtraoral("Eyes");
+  if (eyesExt) {
+    if (eyesExt.normalMark) updates.eyesNormal = eyesExt.normalMark;
+    if (eyesExt.abnormalMark) updates.eyes = eyesExt.abnormalMark;
+    if (eyesExt.specifyText) updates.eyesAbnormalSpecify = eyesExt.specifyText;
+  }
+
+  // --- 6. Vital Signs ---
   const bp =
     lookupValue(fields, kvPairs, ["BloodPressure", "BP"]) ||
     cleanExtractedText(text.match(/(?:\bBP\b|Blood\s*Pressure)[:\s]+(\d{2,3}\s*\/\s*\d{2,3})/i)?.[1]);
