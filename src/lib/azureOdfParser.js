@@ -111,7 +111,7 @@ export function interpretCeuHistoryMark(rawVal) {
   }
 
   // 4. Any token containing slash, backslash, checkmark, or vertical pipe with no alphabetic text
-  if (/[\/\\|✓✔]/.test(s) && !/[a-z0-9]{2,}/i.test(s)) {
+  if (/[/\\|✓✔]/.test(s) && !/[a-z0-9]{2,}/i.test(s)) {
     return "present";
   }
 
@@ -308,7 +308,7 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
     if (!updatedComplaints[num - 1]) {
       const nextNum = num + 1;
       const rx = new RegExp(
-        `(?:^|\\n)\\s*${num}\\.?\\s*([^\n]+?)(?=(?:\\n\\s*${nextNum}\\.|$|\\n\\s*[B-Z]\\.|History\\s+of))`,
+        `(?:^|\\n)\\s*${num}\\.?\\s*([^\\n]+?)(?=(?:\\n\\s*${nextNum}\\.|$|\\n\\s*[B-Z]\\.|History\\s+of))`,
         "i"
       );
       const match = ccBlock.match(rx);
@@ -412,7 +412,7 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
       const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       // Pattern 1: Mark immediately before the condition name, e.g. "[X] Asthma", "/ Asthma", "X Asthma", "✓ Asthma"
       const rxBefore = new RegExp(
-        `(?:^|\\s|[|\\[(<{])([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)(?:\\s*[\])>}])?\\s+${escaped}`,
+        `(?:^|\\s|[|\\[(<{])([/xX✓✔✗✕✖✘|\\-1Il!]|:selected:|selected)(?:\\s*[\\])>}])?\\s+${escaped}`,
         "i"
       );
       const mBefore = searchBlock.match(rxBefore);
@@ -427,7 +427,7 @@ export function parseAzurePage1ToForm(azureResult, prevForm) {
 
       // Pattern 2: Mark immediately after the condition name, e.g. "Asthma /", "Asthma [X]", "Asthma: X"
       const rxAfter = new RegExp(
-        `${escaped}\\s*[:\\-]?\\s*[\\[(<{]?\\s*([/xX✓✔✗✕✖✘|\\-\\1Il!]|:selected:|selected)\\s*[\])>}]?`,
+        `${escaped}\\s*[:\\-]?\\s*[\\[(<{]?\\s*([/xX✓✔✗✕✖✘|\\-1Il!]|:selected:|selected)\\s*[\\])>}]?`,
         "i"
       );
       const mAfter = searchBlock.match(rxAfter);

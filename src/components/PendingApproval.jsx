@@ -1,7 +1,6 @@
 import { useState, useMemo } from "react";
 import Layout from "./Layout";
 import OralDiagnosisForm from "./OralDiagnosisForm";
-import DocumentViewerModal from "./DocumentViewerModal";
 import { normalizeRole, canApproveODF, isStudentClinician } from "../lib/roleUtils";
 import { to8DigitId, DEFAULT_CLINICIAN, generateNextPatientId } from "../lib/dentalService";
 
@@ -30,7 +29,6 @@ export default function PendingApproval({
   const [query, setQuery] = useState("");
   const [filterBy, setFilterBy] = useState("all");
   const [showAddModal, setShowAddModal] = useState(false);
-  const [viewingDocTarget, setViewingDocTarget] = useState(null);
 
   const normRole = normalizeRole(currentUser?.role);
   const allowApprove = canApproveODF(normRole);
@@ -204,12 +202,12 @@ export default function PendingApproval({
                       <div className="table__actions-group">
                         {allowApprove ? (
                           <>
-                            {/* Faculty & System Admin: "View Doc" renamed to "Review Submission", "Review ODF" removed */}
+                            {/* Faculty & System Admin: "Review Submission" opens the submitted digital record + uploaded images */}
                             <button
                               type="button"
                               className="table__action table__action--review"
-                              onClick={() => setViewingDocTarget(p)}
-                              title="Inspect full scanned CEU Oral Diagnosis Form document"
+                              onClick={() => onReview(p)}
+                              title="Review submitted digital CEU Oral Diagnosis Form & uploaded scans"
                             >
                               Review Submission
                             </button>
@@ -281,15 +279,6 @@ export default function PendingApproval({
             onAddPending(odfData);
             setShowAddModal(false);
           }}
-        />
-      )}
-
-      {/* Scanned Document Viewer Modal (opened by Faculty/Admin "Review Submission") */}
-      {viewingDocTarget && (
-        <DocumentViewerModal
-          record={viewingDocTarget}
-          patient={viewingDocTarget}
-          onClose={() => setViewingDocTarget(null)}
         />
       )}
     </Layout>

@@ -15,6 +15,7 @@ import {
   parseAzurePage1ToForm,
   parseAzurePage2ToForm,
 } from "../lib/azureOdfParser";
+import { isStudentClinician } from "../lib/roleUtils";
 import "./OralDiagnosisForm.css";
 
 // 3-Row x 4-Column Medical Conditions matching CEU Makati ODF Page 1
@@ -62,11 +63,19 @@ export default function OralDiagnosisForm({
   patients = null,
   pending = null,
   readOnly = false,
+  isSubmissionView = false,
+  onViewUploadedScans = null,
   onSave = () => {},
   onCancel = () => {},
   currentUser,
 }) {
-  const [activePage, setActivePage] = useState(readOnly ? "all" : "page1"); // "page1" | "page2" | "all"
+  const isStudent = isStudentClinician(currentUser?.role);
+  const hideFull2PageBtn = isSubmissionView && isStudent;
+
+  const [activePage, setActivePage] = useState(
+    hideFull2PageBtn ? "page1" : readOnly ? "all" : "page1"
+  ); // "page1" | "page2" | "all" | "uploaded"
+  const [uploadedPageFilter, setUploadedPageFilter] = useState("both"); // "both" | "page1" | "page2"
   const [odontogramView, setOdontogramView] = useState("auto"); // "crop" | "grid" | "auto"
   const [consentView, setConsentView] = useState("auto"); // "crop" | "form" | "auto"
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
@@ -752,28 +761,49 @@ export default function OralDiagnosisForm({
               className={`ceu-odf-nav-btn ${activePage === "page1" ? "active" : ""}`}
               onClick={() => setActivePage("page1")}
             >
-              📄 Page 1 (Odontogram)
+              📄 Page 1: ODF &amp; Odontogram
             </button>
             <button
               type="button"
               className={`ceu-odf-nav-btn ${activePage === "page2" ? "active" : ""}`}
               onClick={() => setActivePage("page2")}
             >
-              📄 Page 2 (Consent & Plan)
+              📄 Page 2: Diagnostic &amp; Consent
             </button>
-            <button
-              type="button"
-              className={`ceu-odf-nav-btn ${activePage === "all" ? "active" : ""}`}
-              onClick={() => setActivePage("all")}
-            >
-              📜 Full 2-Page View
-            </button>
+            {!hideFull2PageBtn && (
+              <button
+                type="button"
+                className={`ceu-odf-nav-btn ${activePage === "all" ? "active" : ""}`}
+                onClick={() => setActivePage("all")}
+              >
+                📜 Full 2-Page View
+              </button>
+            )}
+            {(isSubmissionView || readOnly || form.rawScanUrl || form.rawScanPage2Url) && (
+              <button
+                type="button"
+                className={`ceu-odf-nav-btn ${activePage === "uploaded" ? "active" : ""}`}
+                onClick={() => setActivePage("uploaded")}
+              >
+                📷 View Uploaded Form
+              </button>
+            )}
           </div>
 
           <div className="ceu-odf-top-bar__actions">
             {readOnly ? (
               <>
                 <span className="ceu-odf-readonly-pill">VIEW RECORD (2-PAGE ODF)</span>
+                {!isStudent && onViewUploadedScans && (
+                  <button
+                    type="button"
+                    className="ceu-btn-print"
+                    onClick={onViewUploadedScans}
+                    title="Open scanned ODF document image viewer (Page 1 & Page 2)"
+                  >
+                    🖼️ Uploaded ODF Images
+                  </button>
+                )}
                 <button
                   type="button"
                   className="ceu-btn-print"
@@ -2384,6 +2414,132 @@ export default function OralDiagnosisForm({
                   <span>09/09/2019</span>
                   <span className="ceu-footer-page">Page 2 of 2</span>
                 </footer>
+              </div>
+            )}
+
+            {/* ================= UPLOADED FORM (PAGE 1 & PAGE 2 IMAGES) ================= */}
+            {activePage === "uploaded" && (
+              <div className="ceu-paper-sheet ceu-paper-sheet--uploaded">
+                <header className="ceu-uploaded-sheet-header">
+                  <div>
+                    <h3>UPLOADED ODF DOCUMENT SCANS</h3>
+                    <p>
+                      Patient: <strong>{form.name || "Unnamed Patient"}</strong> (ID #{form.eightDigitId})
+                    </p>
+                  </div>
+                  <div className="ceu-uploaded-filter-group">
+                    <button
+                      type="button"
+                      className={`ceu-switch-btn ${uploadedPageFilter === "both" ? "active" : ""}`}
+                      onClick={() => setUploadedPageFilter("both")}
+                    >
+                      Both Pages (1 &amp; 2)
+                    </button>
+                    <button
+                      type="button"
+                      className={`ceu-switch-btn ${uploadedPageFilter === "page1" ? "active" : ""}`}
+                      onClick={() => setUploadedPageFilter("page1")}
+                    >
+                      📄 Page 1 Image
+                    </button>
+                    <button
+                      type="button"
+                      className={`ceu-switch-btn ${uploadedPageFilter === "page2" ? "active" : ""}`}
+                      onClick={() => setUploadedPageFilter("page2")}
+                    >
+                      📄 Page 2 Image
+                    </button>
+                    {!isStudent && onViewUploadedScans && (
+                      <button
+                        type="button"
+                        className="ceu-switch-btn"
+                        onClick={onViewUploadedScans}
+                      >
+                        🖼️ Open Full Scan Viewer
+                      </button>
+                    )}
+                  </div>
+                </header>
+
+                <div className={`ceu-uploaded-pages-grid ${uploadedPageFilter === "both" ? "is-two-col" : ""}`}>
+                  {(uploadedPageFilter === "both" || uploadedPageFilter === "page1") && (
+                    <section className="ceu-uploaded-card">
+                      <div className="ceu-uploaded-card__head">
+                        <strong>Page 1: Oral Diagnosis Form &amp; Odontogram</strong>
+                        {form.rawScanUrl && (
+                          <button
+                            type="button"
+                            className="ceu-preview-zoom-btn"
+                            onClick={() => setExpandedImage(form.rawScanUrl)}
+                          >
+                            🔍 Zoom &amp; Inspect
+                          </button>
+                        )}
+                      </div>
+                      <div className="ceu-uploaded-card__body">
+                        {form.rawScanUrl ? (
+                          <img
+                            src={form.rawScanUrl}
+                            alt="Uploaded ODF Page 1"
+                            className="ceu-uploaded-card__img"
+                            onClick={() => setExpandedImage(form.rawScanUrl)}
+                          />
+                        ) : (
+                          <div className="ceu-uploaded-empty">
+                            <span>📄</span>
+                            <p>No physical Page 1 scan image was uploaded for this submission.</p>
+                            <button
+                              type="button"
+                              className="ceu-switch-btn"
+                              onClick={() => setActivePage("page1")}
+                            >
+                              View Digital Page 1
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+
+                  {(uploadedPageFilter === "both" || uploadedPageFilter === "page2") && (
+                    <section className="ceu-uploaded-card">
+                      <div className="ceu-uploaded-card__head">
+                        <strong>Page 2: Diagnostic Tests, Plan &amp; Consent</strong>
+                        {form.rawScanPage2Url && (
+                          <button
+                            type="button"
+                            className="ceu-preview-zoom-btn"
+                            onClick={() => setExpandedImage(form.rawScanPage2Url)}
+                          >
+                            🔍 Zoom &amp; Inspect
+                          </button>
+                        )}
+                      </div>
+                      <div className="ceu-uploaded-card__body">
+                        {form.rawScanPage2Url ? (
+                          <img
+                            src={form.rawScanPage2Url}
+                            alt="Uploaded ODF Page 2"
+                            className="ceu-uploaded-card__img"
+                            onClick={() => setExpandedImage(form.rawScanPage2Url)}
+                          />
+                        ) : (
+                          <div className="ceu-uploaded-empty">
+                            <span>📄</span>
+                            <p>No physical Page 2 scan image was uploaded for this submission.</p>
+                            <button
+                              type="button"
+                              className="ceu-switch-btn"
+                              onClick={() => setActivePage("page2")}
+                            >
+                              View Digital Page 2
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                  )}
+                </div>
               </div>
             )}
 

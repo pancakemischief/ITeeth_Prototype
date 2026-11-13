@@ -66,20 +66,6 @@ export default function DocumentViewerModal({
   const defaultPage2Image = svgToDataUri(generateCeuOdfPage2Svg(docData));
   const page2Image = customPage2Image || defaultPage2Image;
 
-  // 3. Cropped Odontogram ROI
-  const odontogramImage =
-    record?.odontogramCropUrl ||
-    odfDetails?.odontogramCropUrl ||
-    patient?.odfData?.odontogramCropUrl ||
-    null;
-
-  // 4. Cropped Consent ROI
-  const consentImage =
-    record?.consentCropUrl ||
-    odfDetails?.consentCropUrl ||
-    patient?.odfData?.consentCropUrl ||
-    null;
-
   // Active image to display
   let currentImageSrc = page1Image;
   let isCustomUpload = !!customPage1Image;
@@ -89,14 +75,6 @@ export default function DocumentViewerModal({
     currentImageSrc = page2Image;
     isCustomUpload = !!customPage2Image;
     currentTitle = "Diagnostic Tests, Treatment Plan & Consent Form (Page 2)";
-  } else if (activeTab === "odontogram") {
-    currentImageSrc = odontogramImage || page1Image;
-    isCustomUpload = !!odontogramImage;
-    currentTitle = "Section C: Odontogram (Mouth Examination)";
-  } else if (activeTab === "consent") {
-    currentImageSrc = consentImage || page2Image;
-    isCustomUpload = !!consentImage;
-    currentTitle = "Dental Procedure Consent Form & Data Privacy Statement";
   }
 
   // Handle Upload / Replace of physical photo scan
@@ -145,7 +123,7 @@ export default function DocumentViewerModal({
         inset: 0,
         backgroundColor: "rgba(15, 23, 42, 0.75)",
         backdropFilter: "blur(6px)",
-        zIndex: 1100,
+        zIndex: 2500,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -448,58 +426,6 @@ export default function DocumentViewerModal({
               <span>📄 Page 2: Diagnostic & Consent</span>
               {customPage2Image && <span style={{ fontSize: "10px", background: "#ecfdf5", color: "#059669", padding: "1px 5px", borderRadius: "4px" }}>PHOTO</span>}
             </button>
-
-            {odontogramImage && (
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("odontogram");
-                  setRotation(0);
-                }}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: "8px",
-                  border: "1.5px solid",
-                  borderColor: activeTab === "odontogram" ? "#0284c7" : "#cbd5e1",
-                  background: activeTab === "odontogram" ? "#f0f9ff" : "#ffffff",
-                  color: activeTab === "odontogram" ? "#0284c7" : "#475569",
-                  fontWeight: activeTab === "odontogram" ? "800" : "600",
-                  fontSize: "12.5px",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                }}
-              >
-                <span>🦷 Odontogram ROI</span>
-              </button>
-            )}
-
-            {consentImage && (
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveTab("consent");
-                  setRotation(0);
-                }}
-                style={{
-                  padding: "7px 14px",
-                  borderRadius: "8px",
-                  border: "1.5px solid",
-                  borderColor: activeTab === "consent" ? "#059669" : "#cbd5e1",
-                  background: activeTab === "consent" ? "#ecfdf5" : "#ffffff",
-                  color: activeTab === "consent" ? "#059669" : "#475569",
-                  fontWeight: activeTab === "consent" ? "800" : "600",
-                  fontSize: "12.5px",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                }}
-              >
-                <span>✍️ Signed Consent ROI</span>
-              </button>
-            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px", fontSize: "12px" }}>

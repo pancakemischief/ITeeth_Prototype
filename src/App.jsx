@@ -340,9 +340,43 @@ function AppRoutes() {
     return { success: true };
   };
 
-  // Open review modal for pending item
+  // Open the actual submitted digital ODF record (rather than a summary content modal)
   const handleReview = (pendingItem) => {
-    setActiveReviewModal(pendingItem);
+    if (!pendingItem) return;
+    const numericId = to8DigitId(pendingItem.eightDigitId || pendingItem.id);
+    const matchedPatient =
+      patients.find((p) => to8DigitId(p.id) === numericId) || {
+        id: numericId,
+        eightDigitId: numericId,
+        name: pendingItem.name || "Unnamed Patient",
+        lastVisit: pendingItem.visitDate || "",
+        clinician: pendingItem.clinician || DEFAULT_CLINICIAN,
+        procedure: pendingItem.procedure || "Oral Diagnosis Form (ODF)",
+        notes: pendingItem.notes || "",
+        odfData: pendingItem.odfDetails || {},
+      };
+
+    const pseudoRecord = {
+      id: pendingItem.submissionId || `pending_${numericId}_${pendingItem.visitDate || ""}`,
+      date: pendingItem.visitDate || new Date().toLocaleDateString("en-US"),
+      title: pendingItem.procedure || "Oral Diagnosis Form (ODF) Submission",
+      type: "odf",
+      clinician: pendingItem.clinician || DEFAULT_CLINICIAN,
+      summary: pendingItem.notes || pendingItem.odfDetails?.historyOfPresentIllness || "",
+      notes: pendingItem.notes || pendingItem.odfDetails?.historyOfPresentIllness || "",
+      rawScanUrl: pendingItem.rawScanUrl || pendingItem.odfDetails?.rawScanUrl || null,
+      rawScanPage2Url: pendingItem.rawScanPage2Url || pendingItem.odfDetails?.rawScanPage2Url || null,
+      odontogramCropUrl: pendingItem.odontogramCropUrl || pendingItem.odfDetails?.odontogramCropUrl || null,
+      consentCropUrl: pendingItem.consentCropUrl || pendingItem.odfDetails?.consentCropUrl || null,
+      odfDetails: pendingItem.odfDetails || {},
+    };
+
+    setViewRecordTarget({
+      patient: matchedPatient,
+      record: pseudoRecord,
+      source: "submission",
+      pendingItem,
+    });
   };
 
   // Submit Oral Diagnosis Form (ODF) or pending approval
@@ -607,7 +641,7 @@ function AppRoutes() {
         />
       )}
 
-      {/* Full 2-Page Digital ODF Viewer when clicking "View Record" on Selected Patient page (All Roles) */}
+      {/* Full 2-Page Digital ODF Viewer when clicking "View Record", "View Submission", or "Review Submission" */}
       {viewRecordTarget && (
         <OralDiagnosisForm
           key={`view-${to8DigitId(viewRecordTarget.patient?.id)}-${viewRecordTarget.record?.id || "rec"}`}
@@ -615,6 +649,12 @@ function AppRoutes() {
           patients={patients}
           pending={pending}
           readOnly={true}
+          isSubmissionView={viewRecordTarget.source === "submission"}
+          onViewUploadedScans={
+            viewRecordTarget.pendingItem && canApproveODF(currentUser?.role)
+              ? () => setReviewDocModalTarget(viewRecordTarget.pendingItem)
+              : null
+          }
           initialData={buildOdfInitialDataFromRecord(viewRecordTarget.patient, viewRecordTarget.record)}
           currentUser={currentUser}
           onCancel={() => setViewRecordTarget(null)}
