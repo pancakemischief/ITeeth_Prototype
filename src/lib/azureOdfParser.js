@@ -189,6 +189,36 @@ export async function analyzeOdfWithAzure(blob, pageNumber = 1, fileName = `odf_
 }
 
 /**
+ * Send scanned ODF image blob/file to backend `/api/ocr/paddle-odf` (PaddleOCR PP-OCRv5 fallback).
+ */
+export async function analyzeOdfWithPaddle(
+  blob,
+  pageNumber = 1,
+  fileName = `odf_page_${pageNumber}.jpg`
+) {
+  const formData = new FormData();
+  const file =
+    blob instanceof File
+      ? blob
+      : new File([blob], fileName, { type: blob?.type || "image/jpeg" });
+
+  formData.append("document", file);
+  formData.append("pageNumber", String(pageNumber));
+
+  const response = await fetch("/api/ocr/paddle-odf", {
+    method: "POST",
+    body: formData,
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || `PaddleOCR failed with HTTP ${response.status}`);
+  }
+
+  return payload;
+}
+
+/**
  * Map Azure Document Intelligence output for CEU ODF Page 1 into form state updates.
  */
 export function parseAzurePage1ToForm(azureResult, prevForm) {

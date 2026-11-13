@@ -1,5 +1,4 @@
 import { useState, useRef } from "react";
-import Tesseract from "tesseract.js";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import {
   to8DigitId,
@@ -12,6 +11,7 @@ import {
 } from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
+  analyzeOdfWithPaddle,
   parseAzurePage1ToForm,
   parseAzurePage2ToForm,
 } from "../lib/azureOdfParser";
@@ -530,21 +530,20 @@ export default function OralDiagnosisForm({
         console.warn("Azure Document Intelligence warning (falling back to local OCR):", azureErr);
       }
 
-      // 3. Fallback to local Tesseract OCR if Azure credentials are not yet set in .env
+      // 3. Fallback to PaddleOCR (PP-OCRv5) if Azure credentials are not yet set or unavailable
+      let usedPaddle = false;
       if (!usedAzure && blob.type !== "application/pdf") {
-        setOcrProgressText("Running local OCR fallback (configure Azure in .env for cloud ICR)...");
+        setOcrProgressText("Running PaddleOCR fallback (PP-OCRv5) for Page 1...");
         try {
-          const ocrResult = await Tesseract.recognize(blob, "eng", {
-            logger: (m) => {
-              if (m.status === "recognizingtext") {
-                setOcrProgressText(`Reading Page 1 text (local fallback): ${Math.round(m.progress * 100)}%`);
-              }
-            },
-          });
+          const fileName =
+            typeof fileOrUrl !== "string" && fileOrUrl?.name
+              ? fileOrUrl.name
+              : `page1_${form.eightDigitId}.jpg`;
+          const paddleRes = await analyzeOdfWithPaddle(blob, 1, fileName);
+          usedPaddle = true;
 
-          const text = ocrResult?.data?.text || "";
           setForm((prev) => {
-            const p1Updates = parseAzurePage1ToForm({ content: text }, prev);
+            const p1Updates = parseAzurePage1ToForm(paddleRes, prev);
             const nextName = p1Updates.name || prev.name;
             const resolvedId = resolvePatientIdForName(nextName, prev.eightDigitId);
             return {
@@ -554,14 +553,16 @@ export default function OralDiagnosisForm({
             };
           });
         } catch (ocrErr) {
-          console.warn("Local OCR fallback warning:", ocrErr);
+          console.warn("PaddleOCR fallback warning:", ocrErr);
         }
       }
 
       setOcrProgressText(
         usedAzure
           ? "✓ Page 1 extracted via Azure Document Intelligence!"
-          : "✓ Page 1 processed (Odontogram cropped & fields extracted)."
+          : usedPaddle
+          ? "✓ Page 1 processed via PaddleOCR fallback (Odontogram cropped & fields extracted)!"
+          : "✓ Page 1 processed (Odontogram cropped)."
       );
       setTimeout(() => setOcrProgressText(""), 5500);
     } catch (err) {
@@ -638,30 +639,31 @@ export default function OralDiagnosisForm({
         console.warn("Azure Document Intelligence Page 2 warning (falling back to local OCR):", azureErr);
       }
 
-      // 3. Fallback to local Tesseract OCR if Azure credentials are not yet set in .env
+      // 3. Fallback to PaddleOCR (PP-OCRv5) if Azure credentials are not yet set or unavailable
+      let usedPaddle = false;
       if (!usedAzure && blob.type !== "application/pdf") {
-        setOcrProgressText("Running local OCR fallback for Page 2...");
+        setOcrProgressText("Running PaddleOCR fallback (PP-OCRv5) for Page 2...");
         try {
-          const ocrResult = await Tesseract.recognize(blob, "eng", {
-            logger: (m) => {
-              if (m.status === "recognizingtext") {
-                setOcrProgressText(`Reading Page 2 text (local fallback): ${Math.round(m.progress * 100)}%`);
-              }
-            },
-          });
-          const text = ocrResult?.data?.text || "";
+          const fileName =
+            typeof fileOrUrl !== "string" && fileOrUrl?.name
+              ? fileOrUrl.name
+              : `page2_${form.eightDigitId}.jpg`;
+          const paddleRes = await analyzeOdfWithPaddle(blob, 2, fileName);
+          usedPaddle = true;
           setForm((prev) => ({
             ...prev,
-            ...parseAzurePage2ToForm({ content: text }, prev),
+            ...parseAzurePage2ToForm(paddleRes, prev),
           }));
         } catch (ocrErr) {
-          console.warn("Local OCR Page 2 warning:", ocrErr);
+          console.warn("PaddleOCR Page 2 fallback warning:", ocrErr);
         }
       }
 
       setOcrProgressText(
         usedAzure
           ? "✓ Page 2 tables & fields extracted via Azure Document Intelligence!"
+          : usedPaddle
+          ? "✓ Page 2 processed via PaddleOCR fallback! Signed consent block cropped and fields extracted."
           : "✓ Page 2 processed! Signed consent block cropped and linked."
       );
       setTimeout(() => setOcrProgressText(""), 5500);

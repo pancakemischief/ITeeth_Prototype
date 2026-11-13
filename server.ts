@@ -14,6 +14,7 @@ import type {
   DocumentFieldOutput,
   DocumentTableOutput,
 } from "@azure-rest/ai-document-intelligence";
+import { runAnalyzeWithPaddle, PADDLE_MODEL_ID } from "./src/lib/paddleOdfEngine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -187,9 +188,12 @@ async function startServer() {
   app.get("/api/ocr/status", (_req: Request, res: Response) => {
     const { configured, modelId } = isAzureConfigured();
     res.json({
-      provider: configured ? "azure-document-intelligence" : "tesseract-fallback",
+      provider: configured ? "azure-document-intelligence" : "paddle-ocr-fallback",
       configured,
-      modelId,
+      azureConfigured: configured,
+      fallbackProvider: "paddle-ocr",
+      fallbackModelId: PADDLE_MODEL_ID,
+      modelId: configured ? modelId : PADDLE_MODEL_ID,
     });
   });
 
@@ -270,6 +274,45 @@ async function startServer() {
     }
   );
 
+  // Fallback OCR via server-side PaddleOCR (PP-OCRv5 English ONNX Runtime)
+  app.post(
+    "/api/ocr/paddle-odf",
+    upload.single("document"),
+    async (req: Request, res: Response) => {
+      if (!req.file || !req.file.buffer) {
+        res.status(400).json({
+          provider: "paddle-ocr",
+          error: "No document image uploaded.",
+        });
+        return;
+      }
+
+      if (req.file.mimetype === "application/pdf") {
+        res.status(415).json({
+          provider: "paddle-ocr",
+          error: "PaddleOCR fallback processes image scans (JPG/PNG). Configure Azure Document Intelligence for multi-page PDFs.",
+        });
+        return;
+      }
+
+      try {
+        const pageNumber = Number(req.body?.pageNumber || 1);
+        const paddleResult = await runAnalyzeWithPaddle(req.file.buffer, pageNumber);
+        res.json(paddleResult);
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Unexpected error running PaddleOCR fallback.";
+        console.error("[PaddleOCR Fallback Error]:", message);
+        res.status(500).json({
+          provider: "paddle-ocr",
+          error: message,
+        });
+      }
+    }
+  );
+
   // Mount Vite middleware in development, or serve static production build
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
@@ -290,7 +333,7 @@ async function startServer() {
     const { configured, modelId } = isAzureConfigured();
     console.log(
       `[i-Teeth Server] Running on http://localhost:${PORT} | Azure Document Intelligence: ${
-        configured ? `ACTIVE (${modelId})` : "NOT CONFIGURED (using client OCR fallback)"
+        configured ? `ACTIVE (${modelId})` : `NOT CONFIGURED (using PaddleOCR ${PADDLE_MODEL_ID} fallback)`
       }`
     );
   });

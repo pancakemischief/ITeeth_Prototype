@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import { to8DigitId, DEFAULT_CLINICIAN, uploadOdfImageToStorage } from "../lib/dentalService";
-import Tesseract from "tesseract.js";
+import { analyzeOdfWithPaddle, parseAzurePage1ToForm, parseAzurePage2ToForm } from "../lib/azureOdfParser";
 
 const MEDICAL_CONDITIONS = [
   "Rheumatic Heart Disease",
@@ -185,34 +185,19 @@ export default function DigitalOdfForm({
         odontogramCropUrl: odontoUrl || odontoCrop.dataUrl,
       }));
 
-      // 3. Optical Character Recognition on Top Half (Demographics & Case History)
-      setOcrStatus("Extracting patient demographic text via Tesseract OCR...");
+      // 3. Optical Character Recognition on Top Half (Demographics & Case History) via PaddleOCR
+      setOcrStatus("Extracting patient demographic text via PaddleOCR (PP-OCRv5)...");
       try {
-        const result = await Tesseract.recognize(file, "eng", {
-          logger: (m) => {
-            if (m.status === "recognizingtext") {
-              setOcrStatus(`Extracting text: ${Math.round(m.progress * 100)}%`);
-            }
-          },
-        });
-
-        const text = result.data.text || "";
-        // Simple regex heuristics for common fields in CEU ODF
-        const nameMatch = text.match(/Name[:\s]+([A-Za-z\s,.-]+)/i);
-        const ageMatch = text.match(/Age[:\s]+(\d+)/i);
-        const bpMatch = text.match(/Blood\s*Pressure[:\s]+([\d/]+)/i);
-
+        const paddleRes = await analyzeOdfWithPaddle(file, 1, file.name || `page1_${form.eightDigitId}.jpg`);
         setForm((prev) => ({
           ...prev,
-          name: nameMatch ? nameMatch[1].split("\n")[0].trim() : prev.name,
-          age: ageMatch ? ageMatch[1] : prev.age,
-          bloodPressure: bpMatch ? bpMatch[1] : prev.bloodPressure,
+          ...parseAzurePage1ToForm(paddleRes, prev),
         }));
       } catch (ocrErr) {
-        console.warn("OCR non-critical error:", ocrErr);
+        console.warn("PaddleOCR non-critical error:", ocrErr);
       }
 
-      setOcrStatus("✓ Page 1 document preserved! Odontogram cropped and demographics pre-filled.");
+      setOcrStatus("✓ Page 1 document preserved! Odontogram cropped and demographics pre-filled via PaddleOCR.");
     } catch (err) {
       console.error("Page 1 processing error:", err);
       setOcrStatus("Error processing Page 1 scan.");
@@ -221,13 +206,13 @@ export default function DigitalOdfForm({
     }
   };
 
-  // Handle Page 2 Photo Upload (Auto-crops Consent & Data Privacy Signature box)
+  // Handle Page 2 Photo Upload (Auto-crops Consent & Data Privacy Signature box + PaddleOCR)
   const handlePage2Upload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsProcessingOcr(true);
-    setOcrStatus("Preserving full Page 2 scan & cropping Signed Consent section...");
+    setOcrStatus("Preserving full Page 2 scan & running PaddleOCR...");
 
     try {
       // 1. Upload Full Page 2 Document Scan
@@ -244,7 +229,17 @@ export default function DigitalOdfForm({
         consentCropUrl: consentUrl || consentCrop.dataUrl,
       }));
 
-      setOcrStatus("✓ Page 2 document preserved! Signed legal consent preserved as high-res image.");
+      try {
+        const paddleRes = await analyzeOdfWithPaddle(file, 2, file.name || `page2_${form.eightDigitId}.jpg`);
+        setForm((prev) => ({
+          ...prev,
+          ...parseAzurePage2ToForm(paddleRes, prev),
+        }));
+      } catch (ocrErr) {
+        console.warn("PaddleOCR Page 2 non-critical error:", ocrErr);
+      }
+
+      setOcrStatus("✓ Page 2 document preserved & extracted via PaddleOCR!");
     } catch (err) {
       console.error("Page 2 processing error:", err);
       setOcrStatus("Error processing Page 2 scan.");
