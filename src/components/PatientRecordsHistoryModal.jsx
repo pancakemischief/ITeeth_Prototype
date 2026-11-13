@@ -1,18 +1,21 @@
 import { useState, useEffect } from "react";
 import { to8DigitId, DEFAULT_CLINICIAN, fetchPatientHistoryRecords, updateRecordDocumentScan } from "../lib/dentalService";
+import { normalizeRole, isStudentClinician } from "../lib/roleUtils";
 import DocumentViewerModal from "./DocumentViewerModal";
 
 export default function PatientRecordsHistoryModal({
   patient,
+  initialSelectedRecord = null,
   onClose = () => {},
   onOpenOdf = () => {},
-  _currentUser,
+  currentUser,
 }) {
-  const [selectedRecord, setSelectedRecord] = useState(null);
+  const [selectedRecord, setSelectedRecord] = useState(initialSelectedRecord);
   const [viewingDocument, setViewingDocument] = useState(null);
   const [filterType, setFilterType] = useState("all"); // 'all' | 'odf' | 'treatment' | 'appointment'
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isStudent = isStudentClinician(normalizeRole(currentUser?.role));
 
   const eightDigitId = to8DigitId(patient?.id || patient?.eightDigitId);
 
@@ -143,29 +146,31 @@ export default function PatientRecordsHistoryModal({
             >
               <span>📄 View Scanned Document</span>
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onOpenOdf(patient);
-              }}
-              style={{
-                background: "#ffffff",
-                color: "#e91e77",
-                border: "none",
-                borderRadius: "10px",
-                padding: "8px 14px",
-                fontSize: "12.5px",
-                fontWeight: "700",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
-              }}
-            >
-              <span>+ New ODF for Patient</span>
-            </button>
+            {!isStudent && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenOdf(patient);
+                }}
+                style={{
+                  background: "#ffffff",
+                  color: "#e91e77",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "8px 14px",
+                  fontSize: "12.5px",
+                  fontWeight: "700",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  boxShadow: "0 4px 10px rgba(0,0,0,0.1)",
+                }}
+              >
+                <span>+ New ODF for Patient</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}

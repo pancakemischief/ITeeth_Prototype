@@ -51,3 +51,8 @@ export function canViewPendingApprovals(role) {
   const norm = normalizeRole(role);
   return norm !== "patient";
 }
+
+export function canDeleteRecords(role) {
+  const norm = normalizeRole(role);
+  return norm === "faculty" || norm === "admin";
+}

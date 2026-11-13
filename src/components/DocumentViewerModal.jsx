@@ -36,7 +36,7 @@ export default function DocumentViewerModal({
     tentativeDiagnosis: odfDetails?.tentativeDiagnosis || [record?.procedure || "Dental Caries"],
     recommendedTreatmentPlan: odfDetails?.recommendedTreatmentPlan || ["Restorative Procedure", "Prophylaxis"],
     clinician: record?.clinician || patient?.clinician || "Student Clinician",
-    examDate: record?.date || patient?.lastVisit || "10/01/2026",
+    examDate: record?.date || record?.visitDate || odfDetails?.date || patient?.lastVisit || "10/01/2026",
   };
 
   // Resolve image URLs:

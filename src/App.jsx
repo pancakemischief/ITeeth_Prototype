@@ -7,7 +7,7 @@ import Settings from "./components/Settings";
 import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
 import OralDiagnosisForm from "./components/OralDiagnosisForm";
 import DocumentViewerModal from "./components/DocumentViewerModal";
-import { canApproveODF } from "./lib/roleUtils";
+import { canApproveODF, canDeleteRecords } from "./lib/roleUtils";
 import {
   fetchPatientsFromSupabase,
   fetchPendingFromSupabase,
@@ -15,11 +15,131 @@ import {
   savePendingToSupabase,
   approvePendingInSupabase,
   declinePendingInSupabase,
+  deleteSelectedPatientRecords,
+  deleteEntirePatient,
   to8DigitId,
   DEFAULT_CLINICIAN,
   getLocalPatients,
   getLocalPending,
 } from "./lib/dentalService";
+
+function toIsoDateInput(val) {
+  if (!val) return "";
+  const str = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const slashMatch = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (slashMatch) {
+    const m = slashMatch[1].padStart(2, "0");
+    const d = slashMatch[2].padStart(2, "0");
+    const y = slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3];
+    return `${y}-${m}-${d}`;
+  }
+  const parsed = new Date(str);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split("T")[0];
+  }
+  return "";
+}
+
+function buildOdfInitialDataFromRecord(patient, record) {
+  const pOdf = patient?.odfData || {};
+  const rOdf = record?.odfDetails || {};
+  const merged = { ...pOdf, ...rOdf };
+  const numericId = to8DigitId(patient?.id || patient?.eightDigitId || merged.eightDigitId);
+  const recordDate = record?.date || rOdf.date || patient?.lastVisit || "";
+  const rawToothDigits = record?.toothNo ? String(record.toothNo).replace(/[^\d]/g, "") : "";
+  const fallbackTeeth =
+    rawToothDigits && !rOdf.teethFindings
+      ? { [rawToothDigits]: record?.diagnosis || record?.title || "Recorded" }
+      : undefined;
+
+  const hasRecordTreatmentRows =
+    (Array.isArray(rOdf.treatmentLogRows) && rOdf.treatmentLogRows.some((r) => r.leftDate || r.leftCasesApproved || r.rightDate || r.rightCasesApproved)) ||
+    (Array.isArray(rOdf.treatmentLog) && rOdf.treatmentLog.length > 0);
+
+  const fallbackTreatmentLog = !hasRecordTreatmentRows && record
+    ? [
+        {
+          date: recordDate,
+          casesApproved: record.title || patient?.procedure || "",
+          toothNo: record.toothNo || "",
+          ciSign: record.clinician || patient?.clinician || "",
+        },
+      ]
+    : rOdf.treatmentLog || pOdf.treatmentLog || [];
+
+  const isOdfRec = record?.type === "odf";
+
+  return {
+    ...merged,
+    eightDigitId: numericId,
+    name: rOdf.name || patient?.name || pOdf.name || "",
+    visitDate: recordDate,
+    homeAddress: rOdf.homeAddress || patient?.homeAddress || pOdf.homeAddress || "",
+    birthDate: rOdf.birthDate || pOdf.birthDate || patient?.dateOfBirth || "",
+    age: rOdf.age || pOdf.age || patient?.age || "",
+    sex: rOdf.sex || pOdf.sex || patient?.gender || "",
+    height: rOdf.height || pOdf.height || patient?.height || "",
+    weight: rOdf.weight || pOdf.weight || patient?.weight || "",
+    civilStatus: rOdf.civilStatus || pOdf.civilStatus || patient?.civilStatus || "",
+    homeTel: rOdf.homeTel || pOdf.homeTel || patient?.homeTel || "",
+    cellPhone: rOdf.cellPhone || patient?.phone || pOdf.cellPhone || "",
+    nationality: rOdf.nationality || pOdf.nationality || patient?.nationality || "Filipino",
+    occupation: rOdf.occupation || pOdf.occupation || patient?.occupation || "",
+    religion: rOdf.religion || pOdf.religion || patient?.religion || "",
+    chiefComplaints:
+      Array.isArray(rOdf.chiefComplaints) && rOdf.chiefComplaints.some(Boolean)
+        ? rOdf.chiefComplaints
+        : [
+            record?.title || patient?.procedure || "",
+            record?.summary || "",
+            "",
+            "",
+          ],
+    historyOfPresentIllness:
+      rOdf.historyOfPresentIllness ||
+      record?.notes ||
+      record?.summary ||
+      (isOdfRec ? pOdf.historyOfPresentIllness : "") ||
+      patient?.notes ||
+      "",
+    tentativeDiagnosis:
+      Array.isArray(rOdf.tentativeDiagnosis) && rOdf.tentativeDiagnosis.some(Boolean)
+        ? rOdf.tentativeDiagnosis
+        : record?.diagnosis
+        ? [record.diagnosis]
+        : record?.title
+        ? [record.title]
+        : isOdfRec && Array.isArray(pOdf.tentativeDiagnosis)
+        ? pOdf.tentativeDiagnosis
+        : [""],
+    recommendedTreatmentPlan:
+      Array.isArray(rOdf.recommendedTreatmentPlan) && rOdf.recommendedTreatmentPlan.some(Boolean)
+        ? rOdf.recommendedTreatmentPlan
+        : record?.title
+        ? [record.title]
+        : isOdfRec && Array.isArray(pOdf.recommendedTreatmentPlan)
+        ? pOdf.recommendedTreatmentPlan
+        : [""],
+    examinedBy: rOdf.examinedBy || record?.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+    examDate: toIsoDateInput(rOdf.examDate || recordDate),
+    clinicLevel: rOdf.clinicLevel || pOdf.clinicLevel || "",
+    treatmentLogRows: hasRecordTreatmentRows && Array.isArray(rOdf.treatmentLogRows) ? rOdf.treatmentLogRows : undefined,
+    treatmentLog: fallbackTreatmentLog,
+    ciRemarks: rOdf.ciRemarks || record?.notes || (isOdfRec ? pOdf.ciRemarks : "") || "",
+    consentPatientName: rOdf.consentPatientName || pOdf.consentPatientName || patient?.name || "",
+    consentHomeAddress: rOdf.consentHomeAddress || patient?.homeAddress || pOdf.homeAddress || "",
+    consentDate: toIsoDateInput(rOdf.consentDate || recordDate),
+    consentClinicianName: rOdf.consentClinicianName || record?.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+    consentClinicianDate: toIsoDateInput(rOdf.consentClinicianDate || rOdf.consentDate || recordDate),
+    teethFindings: rOdf.teethFindings || fallbackTeeth || (isOdfRec ? pOdf.teethFindings : undefined) || {},
+    rawScanUrl: record?.rawScanUrl || rOdf.rawScanUrl || (isOdfRec ? pOdf.rawScanUrl || patient?.latestOdfScanUrl : null) || null,
+    rawScanPage2Url: record?.rawScanPage2Url || rOdf.rawScanPage2Url || (isOdfRec ? pOdf.rawScanPage2Url || patient?.latestOdfPage2Url : null) || null,
+    odontogramCropUrl: record?.odontogramCropUrl || rOdf.odontogramCropUrl || (isOdfRec ? pOdf.odontogramCropUrl : null) || null,
+    consentCropUrl: record?.consentCropUrl || rOdf.consentCropUrl || (isOdfRec ? pOdf.consentCropUrl : null) || null,
+    clinician: record?.clinician || rOdf.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+  };
+}
 
 function AppRoutes() {
   const navigate = useNavigate();
@@ -36,7 +156,8 @@ function AppRoutes() {
 
   const [patients, setPatients] = useState(() => getLocalPatients());
   const [pending, setPending] = useState(() => getLocalPending());
-  const [historyPatient, setHistoryPatient] = useState(null); // patient object to inspect records
+  const [historyTarget, setHistoryTarget] = useState(null); // { patient, initialRecord }
+  const [viewRecordTarget, setViewRecordTarget] = useState(null); // { patient, record } -> Full 2-page ODF view
   const [odfModalTarget, setOdfModalTarget] = useState(null); // patient object to open ODF for
   const [activeReviewModal, setActiveReviewModal] = useState(null); // pending item to review
   const [reviewDocModalTarget, setReviewDocModalTarget] = useState(null); // item to inspect document scan for
@@ -153,9 +274,70 @@ function AppRoutes() {
     else navigate(`/${key}`);
   };
 
-  // Open rich history records modal
-  const handleViewRecords = (patient) => {
-    setHistoryPatient(patient);
+  // Open full 2-page digital form when clicking "View Record" on a record row, or fallback history modal
+  const handleViewRecords = (patient, initialRecord = null) => {
+    if (initialRecord) {
+      setViewRecordTarget({ patient, record: initialRecord });
+      return;
+    }
+    setHistoryTarget({ patient, initialRecord: null });
+  };
+
+  // Delete selected history records for a patient (Faculty & System Admin only)
+  const handleDeleteSelectedRecords = async (patient, recordsToDelete = []) => {
+    if (!canDeleteRecords(currentUser?.role)) {
+      showToast("❌ Permission Denied: Only Dentistry Department Faculty and System Administrators can delete records.");
+      return { success: false };
+    }
+    if (!patient || !recordsToDelete.length) return { success: false };
+
+    const res = await deleteSelectedPatientRecords(patient, recordsToDelete);
+    const deletedSet = new Set(res.deletedIds || []);
+    const numericId = to8DigitId(patient.id || patient.eightDigitId);
+
+    setPending((prev) =>
+      prev.filter((p) => {
+        const subId = p.submissionId || `pending_${to8DigitId(p.eightDigitId || p.id)}_${p.visitDate || ""}`;
+        return !deletedSet.has(subId) && !deletedSet.has(p.submissionId);
+      })
+    );
+
+    if (
+      viewRecordTarget &&
+      to8DigitId(viewRecordTarget.patient?.id) === numericId &&
+      deletedSet.has(viewRecordTarget.record?.id)
+    ) {
+      setViewRecordTarget(null);
+    }
+
+    showToast(
+      `✓ Deleted ${recordsToDelete.length} selected record${recordsToDelete.length > 1 ? "s" : ""} for ${patient.name}.`
+    );
+    return res;
+  };
+
+  // Delete an entire patient record + history (Faculty & System Admin only)
+  const handleDeletePatient = async (patient) => {
+    if (!canDeleteRecords(currentUser?.role)) {
+      showToast("❌ Permission Denied: Only Dentistry Department Faculty and System Administrators can delete patient records.");
+      return { success: false };
+    }
+    if (!patient) return { success: false };
+    const numericId = to8DigitId(patient.id || patient.eightDigitId);
+
+    await deleteEntirePatient(patient);
+
+    setPatients((prev) => prev.filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId));
+    setPending((prev) => prev.filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId));
+    if (historyTarget && to8DigitId(historyTarget.patient?.id) === numericId) {
+      setHistoryTarget(null);
+    }
+    if (viewRecordTarget && to8DigitId(viewRecordTarget.patient?.id) === numericId) {
+      setViewRecordTarget(null);
+    }
+
+    showToast(`✓ Deleted patient record #${numericId} (${patient.name}).`);
+    return { success: true };
   };
 
   // Open review modal for pending item
@@ -166,46 +348,59 @@ function AppRoutes() {
   // Submit Oral Diagnosis Form (ODF) or pending approval
   const handleUploadODF = async (odfItem) => {
     const formattedId = to8DigitId(odfItem.id || odfItem.eightDigitId);
+    const submissionId = odfItem.submissionId || `sub_${formattedId}_${Date.now()}`;
     const formattedPending = {
       ...odfItem,
       id: formattedId,
       eightDigitId: formattedId,
+      submissionId,
       clinician: odfItem.clinician || DEFAULT_CLINICIAN,
     };
 
-    // 1. Immediately update pending state
-    setPending((prev) => [formattedPending, ...prev.filter((p) => to8DigitId(p.id) !== formattedId)]);
-
-    // 2. Also ensure patient appears in the patients table
-    const patientEntry = {
-      id: formattedId,
-      eightDigitId: formattedId,
-      name: formattedPending.name || "Patient #" + formattedId,
-      lastVisit: formattedPending.visitDate || new Date().toLocaleDateString("en-US"),
-      clinician: formattedPending.clinician,
-      procedure: formattedPending.procedure || "Oral Diagnosis Form (ODF)",
-      notes: formattedPending.notes || "",
-      phone: odfItem.odfDetails?.cellPhone || odfItem.cellPhone || "",
-      email: odfItem.odfDetails?.email || odfItem.email || "",
-      gender: odfItem.odfDetails?.sex || odfItem.sex || "Male",
-      dateOfBirth: odfItem.odfDetails?.birthDate || odfItem.birthDate || "",
-      age: odfItem.odfDetails?.age || odfItem.age || "",
-      homeAddress: odfItem.odfDetails?.homeAddress || odfItem.homeAddress || "",
-      odfData: odfItem.odfDetails || odfItem,
-    };
-
-    setPatients((prev) => [
-      patientEntry,
-      ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
+    // 1. Update pending state (match by submissionId so multiple submissions for same patient don't collide)
+    setPending((prev) => [
+      formattedPending,
+      ...prev.filter((p) => (p.submissionId || to8DigitId(p.id)) !== submissionId),
     ]);
 
-    showToast(`Submitting ODF for Patient #${formattedId} (${patientEntry.name}) to Supabase...`);
+    // 2. Update or register patient in patients table while preserving existing metadata/dbId
+    let savedPatientName = formattedPending.name || "Patient #" + formattedId;
+    setPatients((prev) => {
+      const existing = prev.find((p) => to8DigitId(p.id) === formattedId);
+      const patientEntry = {
+        ...(existing || {}),
+        id: formattedId,
+        eightDigitId: formattedId,
+        name: existing?.name || formattedPending.name || "Patient #" + formattedId,
+        lastVisit: formattedPending.visitDate || existing?.lastVisit || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+        clinician: formattedPending.clinician || existing?.clinician,
+        procedure: formattedPending.procedure || existing?.procedure || "Oral Diagnosis Form (ODF)",
+        notes: formattedPending.notes || existing?.notes || "",
+        phone: odfItem.odfDetails?.cellPhone || odfItem.cellPhone || existing?.phone || "",
+        email: odfItem.odfDetails?.email || odfItem.email || existing?.email || "",
+        gender: odfItem.odfDetails?.sex || odfItem.sex || existing?.gender || "Male",
+        dateOfBirth: odfItem.odfDetails?.birthDate || odfItem.birthDate || existing?.dateOfBirth || "",
+        age: odfItem.odfDetails?.age || odfItem.age || existing?.age || "",
+        homeAddress: odfItem.odfDetails?.homeAddress || odfItem.homeAddress || existing?.homeAddress || "",
+        odfData: {
+          ...(existing?.odfData || {}),
+          ...(odfItem.odfDetails || odfItem),
+        },
+      };
+      savedPatientName = patientEntry.name;
+      return [
+        patientEntry,
+        ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
+      ];
+    });
+
+    showToast(`Submitting ODF for Patient #${formattedId} (${savedPatientName})...`);
 
     const res = await savePendingToSupabase(formattedPending);
     if (res.success) {
-      showToast(`✓ ODF #${formattedId} saved & synced to Supabase database!`);
+      showToast(`✓ ODF #${formattedId} saved & added to patient record history!`);
     } else {
-      showToast(`✓ ODF #${formattedId} saved locally (${res.error || "persisted in local cache"})`);
+      showToast(`✓ ODF #${formattedId} saved to patient record history (${res.error || "persisted in local cache"})`);
     }
   };
 
@@ -216,23 +411,37 @@ function AppRoutes() {
       return;
     }
     const formattedId = to8DigitId(item.id);
-    setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
+    const targetSubId = item.submissionId;
 
-    const approvedPatient = {
-      id: formattedId,
-      eightDigitId: formattedId,
-      name: item.name,
-      lastVisit: item.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-      clinician: item.clinician || DEFAULT_CLINICIAN,
-      procedure: item.procedure,
-      notes: item.notes,
-      odfData: item.odfDetails || null,
-    };
+    setPending((prev) =>
+      prev.filter((p) => {
+        if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+        return to8DigitId(p.id) !== formattedId;
+      })
+    );
 
-    setPatients((prev) => [
-      approvedPatient,
-      ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
-    ]);
+    setPatients((prev) => {
+      const existing = prev.find((p) => to8DigitId(p.id) === formattedId);
+      const approvedPatient = {
+        ...(existing || {}),
+        id: formattedId,
+        eightDigitId: formattedId,
+        name: existing?.name || item.name,
+        lastVisit: item.visitDate || existing?.lastVisit || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+        clinician: item.clinician || existing?.clinician || DEFAULT_CLINICIAN,
+        procedure: item.procedure || existing?.procedure,
+        notes: item.notes || existing?.notes,
+        odfData: {
+          ...(existing?.odfData || {}),
+          ...(item.odfDetails || {}),
+        },
+      };
+      return [
+        approvedPatient,
+        ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
+      ];
+    });
+
     setActiveReviewModal(null);
     showToast(`✓ Approved #${formattedId} (${item.name}). Syncing with Supabase...`);
 
@@ -244,7 +453,7 @@ function AppRoutes() {
           ...prev.filter((p) => to8DigitId(p.id) !== formattedId && p.id !== res.data.id),
         ]);
       }
-      showToast(`✓ Successfully approved & synced #${formattedId} in Supabase!`);
+      showToast(`✓ Successfully approved & added to #${formattedId} record history!`);
     } else {
       showToast(`✓ Approved & saved to patient history (${res.error || "persisted locally"})`);
     }
@@ -257,7 +466,14 @@ function AppRoutes() {
       return;
     }
     const formattedId = to8DigitId(item.id);
-    setPending((prev) => prev.filter((p) => to8DigitId(p.id) !== formattedId));
+    const targetSubId = item.submissionId;
+
+    setPending((prev) =>
+      prev.filter((p) => {
+        if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+        return to8DigitId(p.id) !== formattedId;
+      })
+    );
     setActiveReviewModal(null);
     showToast(`Declining #${formattedId} (${item.name})...`);
 
@@ -332,8 +548,11 @@ function AppRoutes() {
           element={
             <PatientRecord
               patients={patients}
+              pending={pending}
               onNavigate={handleNavigate}
               onViewRecords={handleViewRecords}
+              onDeleteSelectedRecords={handleDeleteSelectedRecords}
+              onDeletePatient={handleDeletePatient}
               onUploadODF={handleUploadODF}
               isSyncing={isSyncing}
               currentUser={currentUser}
@@ -346,6 +565,7 @@ function AppRoutes() {
           element={
             <PendingApproval
               pending={pending}
+              patients={patients}
               onNavigate={handleNavigate}
               onReview={handleReview}
               onApprove={handleApprove}
@@ -373,16 +593,31 @@ function AppRoutes() {
         <Route path="*" element={<Navigate to="/patients" replace />} />
       </Routes>
 
-      {/* Patient Record History Modal: List of clickable historical records */}
-      {historyPatient && (
+      {/* Patient Record History Modal: List of clickable historical records or specific visit details */}
+      {historyTarget && (
         <PatientRecordsHistoryModal
-          patient={historyPatient}
-          onClose={() => setHistoryPatient(null)}
+          patient={historyTarget.patient}
+          initialSelectedRecord={historyTarget.initialRecord}
+          onClose={() => setHistoryTarget(null)}
           onOpenOdf={(p) => {
-            setHistoryPatient(null);
+            setHistoryTarget(null);
             setOdfModalTarget(p);
           }}
           currentUser={currentUser}
+        />
+      )}
+
+      {/* Full 2-Page Digital ODF Viewer when clicking "View Record" on Selected Patient page (All Roles) */}
+      {viewRecordTarget && (
+        <OralDiagnosisForm
+          key={`view-${to8DigitId(viewRecordTarget.patient?.id)}-${viewRecordTarget.record?.id || "rec"}`}
+          patientId={to8DigitId(viewRecordTarget.patient?.id || viewRecordTarget.patient?.eightDigitId)}
+          patients={patients}
+          pending={pending}
+          readOnly={true}
+          initialData={buildOdfInitialDataFromRecord(viewRecordTarget.patient, viewRecordTarget.record)}
+          currentUser={currentUser}
+          onCancel={() => setViewRecordTarget(null)}
         />
       )}
 
@@ -390,17 +625,15 @@ function AppRoutes() {
       {odfModalTarget && (
         <OralDiagnosisForm
           patientId={to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId)}
+          patients={patients}
+          pending={pending}
           initialData={{
+            ...(odfModalTarget.odfData || {}),
             eightDigitId: to8DigitId(odfModalTarget.id || odfModalTarget.eightDigitId),
             name: odfModalTarget.name || "",
             cellPhone: odfModalTarget.phone || "",
             homeAddress: odfModalTarget.homeAddress || "",
             historyOfPresentIllness: odfModalTarget.notes || "",
-            chiefComplaints: [odfModalTarget.procedure || "", "", "", ""],
-            tentativeDiagnosis: [odfModalTarget.procedure || "", "", "", "", "", ""],
-            recommendedTreatmentPlan: ["", "", "", "", "", ""],
-            medicalConditions: [],
-            diagnosticTests: [],
             sex: odfModalTarget.gender || "Male",
             age: odfModalTarget.age || "",
             birthDate: odfModalTarget.dateOfBirth || "",

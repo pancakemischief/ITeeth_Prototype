@@ -33,6 +33,110 @@ export const DEFAULT_CLINICIAN = "Dr. Jane Doe, MD";
 const CACHE_PATIENTS_KEY = "iteeth_patients_v2";
 const CACHE_PENDING_KEY = "iteeth_pending_v2";
 const CACHE_RECORDS_KEY = "iteeth_records_v2";
+const CACHE_DELETED_PATIENTS_KEY = "iteeth_deleted_patients_v2";
+const CACHE_DELETED_RECORDS_KEY = "iteeth_deleted_records_v2";
+
+/**
+ * Normalizes a person's name into comparable tokens, handling both
+ * "First Last" and "Last, First M.I." formats.
+ */
+export function extractComparableNameTokens(name) {
+  if (!name || typeof name !== "string") return [];
+  const raw = name.trim();
+  if (!raw) return [];
+
+  // Reorder "Last, First Middle" -> "First Middle Last"
+  let reordered = raw;
+  if (raw.includes(",")) {
+    const [lastPart, ...restParts] = raw.split(",");
+    const firstMiddle = restParts.join(" ").trim();
+    const last = lastPart.trim();
+    reordered = `${firstMiddle} ${last}`.trim();
+  }
+
+  return reordered
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Matches a patient name against existing patients in the database/records.
+ * Supports exact match, comma-separated "Last, First M.I.", and ignoring middle initials.
+ */
+export function findExistingPatientByName(name, patientsList = []) {
+  const inputTokens = extractComparableNameTokens(name);
+  if (inputTokens.length === 0) return null;
+
+  const normalizedInput = inputTokens.join(" ");
+  if (
+    normalizedInput === "unnamed patient" ||
+    normalizedInput === "unknown patient" ||
+    normalizedInput.length < 3
+  ) {
+    return null;
+  }
+
+  // Strip 1-letter middle initials when comparing multi-word names
+  const coreInputTokens =
+    inputTokens.length >= 3
+      ? inputTokens.filter((t, idx) => idx === 0 || idx === inputTokens.length - 1 || t.length > 1)
+      : inputTokens;
+  const sortedCoreInput = [...coreInputTokens].sort().join(" ");
+
+  for (const patient of patientsList || []) {
+    if (!patient?.name) continue;
+    const targetTokens = extractComparableNameTokens(patient.name);
+    if (targetTokens.length === 0) continue;
+
+    // Exact normalized token sequence match
+    if (targetTokens.join(" ") === normalizedInput) {
+      return patient;
+    }
+
+    // Core token match (handles "Doe, John" vs "John Doe" and "Doe, John M." vs "John Doe")
+    if (coreInputTokens.length >= 2 && targetTokens.length >= 2) {
+      const coreTargetTokens =
+        targetTokens.length >= 3
+          ? targetTokens.filter((t, idx) => idx === 0 || idx === targetTokens.length - 1 || t.length > 1)
+          : targetTokens;
+
+      if (
+        coreInputTokens.length === coreTargetTokens.length &&
+        [...coreTargetTokens].sort().join(" ") === sortedCoreInput
+      ) {
+        return patient;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generates the next unique unused 8-digit patient ID starting from 10000001.
+ */
+export function generateNextPatientId(patientsList = [], pendingList = []) {
+  const all = [...(patientsList || []), ...(pendingList || []), ...DEFAULT_PATIENTS, ...DEFAULT_PENDING];
+  let maxNumeric = 10000000;
+  const used = new Set();
+
+  for (const item of all) {
+    const idStr = to8DigitId(item?.eightDigitId || item?.id);
+    used.add(idStr);
+    const num = parseInt(idStr, 10);
+    if (!Number.isNaN(num) && num >= 10000000 && num < 99999999) {
+      if (num > maxNumeric) maxNumeric = num;
+    }
+  }
+
+  let candidate = maxNumeric + 1;
+  while (used.has(String(candidate).padStart(8, "0"))) {
+    candidate += 1;
+  }
+  return String(candidate).padStart(8, "0");
+}
 
 export const DEFAULT_PATIENTS = [
   {
@@ -45,10 +149,28 @@ export const DEFAULT_PATIENTS = [
     phone: "0917-555-0101",
     email: "patient.johndoe@gmail.com",
     gender: "Male",
-    dateOfBirth: "1994-05-12",
+    dateOfBirth: "05/12/1994",
     age: "31",
     homeAddress: "Poblacion, Makati City",
     notes: "Patient reports mild tooth sensitivity on lower left molar during cold drinks.",
+    odfData: {
+      eightDigitId: "10000001",
+      name: "John Doe",
+      birthDate: "05/12/1994",
+      age: "31",
+      sex: "Male",
+      height: "173 cm",
+      weight: "68 kg",
+      civilStatus: "Single",
+      homeTel: "(02) 8555-0101",
+      cellPhone: "0917-555-0101",
+      nationality: "Filipino",
+      occupation: "Software Analyst",
+      religion: "Roman Catholic",
+      homeAddress: "Poblacion, Makati City",
+      allergyCheck: "present",
+      allergySpecify: "Mild sensitivity to Penicillin",
+    },
   },
   {
     id: "10000002",
@@ -60,10 +182,28 @@ export const DEFAULT_PATIENTS = [
     phone: "0918-555-0102",
     email: "sarah.connor@gmail.com",
     gender: "Female",
-    dateOfBirth: "1988-11-20",
+    dateOfBirth: "11/20/1988",
     age: "37",
     homeAddress: "San Lorenzo, Makati City",
     notes: "Completed root canal therapy on maxillary first molar. Gutta-percha obturation verified.",
+    odfData: {
+      eightDigitId: "10000002",
+      name: "Sarah Connor",
+      birthDate: "11/20/1988",
+      age: "37",
+      sex: "Female",
+      height: "165 cm",
+      weight: "58 kg",
+      civilStatus: "Married",
+      homeTel: "(02) 8555-0102",
+      cellPhone: "0918-555-0102",
+      nationality: "Filipino",
+      occupation: "Accountant",
+      religion: "Christian",
+      homeAddress: "San Lorenzo, Makati City",
+      allergyCheck: "none",
+      allergySpecify: "",
+    },
   },
   {
     id: "10000003",
@@ -75,10 +215,28 @@ export const DEFAULT_PATIENTS = [
     phone: "0919-555-0103",
     email: "marcus.wright@gmail.com",
     gender: "Male",
-    dateOfBirth: "1991-03-15",
+    dateOfBirth: "03/15/1991",
     age: "35",
     homeAddress: "Bel-Air, Makati City",
     notes: "Class II MOD resin restoration completed. Occlusion evaluated with articulating paper.",
+    odfData: {
+      eightDigitId: "10000003",
+      name: "Marcus Wright",
+      birthDate: "03/15/1991",
+      age: "35",
+      sex: "Male",
+      height: "178 cm",
+      weight: "74 kg",
+      civilStatus: "Single",
+      homeTel: "—",
+      cellPhone: "0919-555-0103",
+      nationality: "Filipino",
+      occupation: "Architect",
+      religion: "Roman Catholic",
+      homeAddress: "Bel-Air, Makati City",
+      allergyCheck: "none",
+      allergySpecify: "",
+    },
   },
   {
     id: "10000004",
@@ -90,10 +248,28 @@ export const DEFAULT_PATIENTS = [
     phone: "0920-555-0104",
     email: "kyle.reese@gmail.com",
     gender: "Male",
-    dateOfBirth: "1996-08-24",
+    dateOfBirth: "08/24/1996",
     age: "29",
     homeAddress: "Palanan, Makati City",
     notes: "Full mouth scaling and root planing for localized moderate periodontitis.",
+    odfData: {
+      eightDigitId: "10000004",
+      name: "Kyle Reese",
+      birthDate: "08/24/1996",
+      age: "29",
+      sex: "Male",
+      height: "170 cm",
+      weight: "65 kg",
+      civilStatus: "Single",
+      homeTel: "—",
+      cellPhone: "0920-555-0104",
+      nationality: "Filipino",
+      occupation: "Technician",
+      religion: "Roman Catholic",
+      homeAddress: "Palanan, Makati City",
+      allergyCheck: "none",
+      allergySpecify: "",
+    },
   },
 ];
 
@@ -150,20 +326,87 @@ export const DEFAULT_PENDING = [
 let inMemoryPatients = [...DEFAULT_PATIENTS];
 let inMemoryPending = [...DEFAULT_PENDING];
 let inMemoryRecords = [];
+let inMemoryDeletedPatientIds = [];
+let inMemoryDeletedRecordIds = [];
 
-export function getLocalPatients() {
+export function getDeletedPatientIds() {
   if (typeof localStorage !== "undefined") {
     try {
-      const raw = localStorage.getItem(CACHE_PATIENTS_KEY);
-      if (raw) {
+      const raw = localStorage.getItem(CACHE_DELETED_PATIENTS_KEY);
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          inMemoryDeletedPatientIds = parsed;
+          return parsed;
+        }
       }
     } catch {
       // ignore
     }
   }
-  return inMemoryPatients;
+  return inMemoryDeletedPatientIds;
+}
+
+function addDeletedPatientIds(ids = []) {
+  const next = Array.from(new Set([...getDeletedPatientIds(), ...ids.map((id) => to8DigitId(id))]));
+  inMemoryDeletedPatientIds = next;
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(CACHE_DELETED_PATIENTS_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+  return next;
+}
+
+export function getDeletedRecordIds() {
+  if (typeof localStorage !== "undefined") {
+    try {
+      const raw = localStorage.getItem(CACHE_DELETED_RECORDS_KEY);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          inMemoryDeletedRecordIds = parsed;
+          return parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return inMemoryDeletedRecordIds;
+}
+
+function addDeletedRecordIds(ids = []) {
+  const next = Array.from(new Set([...getDeletedRecordIds(), ...ids.filter(Boolean).map(String)]));
+  inMemoryDeletedRecordIds = next;
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(CACHE_DELETED_RECORDS_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+  return next;
+}
+
+export function getLocalPatients() {
+  const deletedSet = new Set(getDeletedPatientIds());
+  if (typeof localStorage !== "undefined") {
+    try {
+      const raw = localStorage.getItem(CACHE_PATIENTS_KEY);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((p) => !deletedSet.has(to8DigitId(p?.eightDigitId || p?.id)));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return inMemoryPatients.filter((p) => !deletedSet.has(to8DigitId(p?.eightDigitId || p?.id)));
 }
 
 export function saveLocalPatients(patients) {
@@ -181,9 +424,9 @@ export function getLocalPending() {
   if (typeof localStorage !== "undefined") {
     try {
       const raw = localStorage.getItem(CACHE_PENDING_KEY);
-      if (raw) {
+      if (raw !== null) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       // ignore
@@ -207,7 +450,10 @@ export function getLocalRecords() {
   if (typeof localStorage !== "undefined") {
     try {
       const raw = localStorage.getItem(CACHE_RECORDS_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch {
       // ignore
     }
@@ -216,10 +462,21 @@ export function getLocalRecords() {
 }
 
 export function saveLocalRecord(record) {
-  inMemoryRecords = [record, ...inMemoryRecords.filter((r) => r.id !== record.id)];
+  inMemoryRecords = [record, ...getLocalRecords().filter((r) => r.id !== record.id)];
   if (typeof localStorage !== "undefined") {
     try {
       localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(inMemoryRecords));
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function saveLocalRecordsList(records) {
+  inMemoryRecords = records;
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(records));
     } catch {
       // ignore
     }
@@ -309,6 +566,7 @@ function normalizePending(row, index = 1) {
  * Fetch patients from Supabase `patients` table, with transparent fallback & merge with local cache
  */
 export async function fetchPatientsFromSupabase() {
+  const deletedSet = new Set(getDeletedPatientIds());
   try {
     const { data, error } = await supabase
       .from("patients")
@@ -321,7 +579,9 @@ export async function fetchPatientsFromSupabase() {
     }
 
     if (Array.isArray(data) && data.length > 0) {
-      const normalized = data.map((r, i) => normalizePatient(r, i + 1));
+      const normalized = data
+        .map((r, i) => normalizePatient(r, i + 1))
+        .filter((p) => !deletedSet.has(p.eightDigitId));
       // Merge with any locally added patients that aren't yet in Supabase
       const local = getLocalPatients();
       const dbIds = new Set(normalized.map((p) => p.eightDigitId));
@@ -544,6 +804,7 @@ export async function uploadOdfImageToStorage(fileOrBlob, fileName) {
  */
 export async function savePendingToSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
+  const submissionId = item.submissionId || `sub_${numericId}_${Date.now()}`;
 
   // Preserve image crops inside odf_details
   const odfDetails = {
@@ -556,6 +817,7 @@ export async function savePendingToSupabase(item) {
   const formattedPending = {
     id: numericId,
     eightDigitId: numericId,
+    submissionId,
     name: item.name || "Unnamed Patient",
     visitDate:
       item.visitDate ||
@@ -565,25 +827,28 @@ export async function savePendingToSupabase(item) {
         year: "numeric",
       }),
     clinician: item.clinician || DEFAULT_CLINICIAN,
+    submittedBy: item.submittedBy || odfDetails.submittedBy || null,
     procedure: item.procedure || "Oral Diagnosis Form (ODF)",
     notes: item.notes || item.historyOfPresentIllness || "",
     status: item.status || "pending",
     type: "ODF Submission",
     odfDetails,
+    rawScanUrl: item.rawScanUrl || odfDetails.rawScanUrl || null,
+    rawScanPage2Url: item.rawScanPage2Url || odfDetails.rawScanPage2Url || null,
     odontogramCropUrl: odfDetails.odontogramCropUrl,
     consentCropUrl: odfDetails.consentCropUrl,
-    submittedAt: new Date().toISOString(),
+    submittedAt: item.submittedAt || new Date().toISOString(),
   };
 
-  // 1. Immediately update LocalStorage cache so data is NEVER lost on restart
+  // 1. Immediately update LocalStorage cache (filter only exact submissionId so multiple submissions for same patient aren't overwritten)
   const localPending = getLocalPending();
   const updatedPending = [
     formattedPending,
-    ...localPending.filter((p) => to8DigitId(p.id) !== numericId),
+    ...localPending.filter((p) => (p.submissionId || to8DigitId(p.id)) !== submissionId),
   ];
   saveLocalPending(updatedPending);
 
-  // 2. Also register or update patient in patients cache so the patient appears in records
+  // 2. Also register or update patient in patients cache so the patient appears in records without wiping existing demographics
   const localPatients = getLocalPatients();
   const existingPatient = localPatients.find((p) => to8DigitId(p.id) === numericId);
   if (!existingPatient) {
@@ -603,9 +868,26 @@ export async function savePendingToSupabase(item) {
       odfData: odfDetails,
     };
     savePatientToSupabase(newPatient).catch(() => {});
+  } else {
+    // Update existing patient's lastVisit and merge odfData while preserving dbId & prior info
+    const mergedPatient = {
+      ...existingPatient,
+      lastVisit: formattedPending.visitDate || existingPatient.lastVisit,
+      clinician: formattedPending.clinician || existingPatient.clinician,
+      phone: odfDetails.cellPhone || existingPatient.phone,
+      gender: odfDetails.sex || existingPatient.gender,
+      dateOfBirth: odfDetails.birthDate || existingPatient.dateOfBirth,
+      age: odfDetails.age || existingPatient.age,
+      homeAddress: odfDetails.homeAddress || existingPatient.homeAddress,
+      odfData: {
+        ...(existingPatient.odfData || {}),
+        ...odfDetails,
+      },
+    };
+    savePatientToSupabase(mergedPatient).catch(() => {});
   }
 
-  // 3. Attempt insert to Supabase pending_approvals table
+  // 3. Attempt insert/upsert to Supabase pending_approvals table
   try {
     const payload = {
       eight_digit_id: numericId,
@@ -636,7 +918,7 @@ export async function savePendingToSupabase(item) {
     return {
       success: true,
       error: null,
-      data: data?.[0] ? normalizePending(data[0]) : formattedPending,
+      data: data?.[0] ? { ...normalizePending(data[0]), submissionId } : formattedPending,
     };
   } catch (err) {
     console.warn("[Supabase] Unexpected error saving pending approval:", err);
@@ -649,17 +931,23 @@ export async function savePendingToSupabase(item) {
  */
 export async function approvePendingInSupabase(item) {
   const numericId = to8DigitId(item.id);
+  const targetSubId = item.submissionId;
 
   // 1. Update local pending cache
   const localPending = getLocalPending();
-  saveLocalPending(localPending.filter((p) => to8DigitId(p.id) !== numericId));
+  saveLocalPending(
+    localPending.filter((p) => {
+      if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+      return to8DigitId(p.id) !== numericId;
+    })
+  );
 
-  // 2. Add to treatment records
+  // 2. Add to treatment records (unique timestamped ID preserves full patient history!)
   const treatmentRecord = {
-    id: `rec_${Date.now()}`,
+    id: `rec_${numericId}_${Date.now()}`,
     patientId: numericId,
     title: item.procedure || "Approved Oral Diagnosis Form (ODF)",
-    date: item.visitDate || new Date().toLocaleDateString("en-US"),
+    date: item.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
     clinician: item.clinician || DEFAULT_CLINICIAN,
     type: "odf",
     typeLabel: "Approved ODF",
@@ -670,20 +958,33 @@ export async function approvePendingInSupabase(item) {
     odfDetails: item.odfDetails || null,
     odontogramCropUrl: item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl || null,
     consentCropUrl: item.odfDetails?.consentCropUrl || item.consentCropUrl || null,
+    hasOdontogram: !!(item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl),
   };
   saveLocalRecord(treatmentRecord);
 
-  // 3. Update patient record
+  // 3. Merge with existing patient record so prior demographics and dbId are retained
+  const existingPatient = getLocalPatients().find((p) => to8DigitId(p.id) === numericId);
   const patientResult = await savePatientToSupabase({
+    ...(existingPatient || {}),
     id: numericId,
-    name: item.name,
-    lastVisit: item.visitDate,
-    clinician: item.clinician || DEFAULT_CLINICIAN,
-    procedure: item.procedure || "Approved Oral Diagnosis Form (ODF)",
-    notes: item.notes || "Approved faculty procedure and ODF documentation.",
-    latestOdfScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
-    latestOdfPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
-    odfData: item.odfDetails || null,
+    eightDigitId: numericId,
+    name: item.name || existingPatient?.name,
+    lastVisit: item.visitDate || existingPatient?.lastVisit,
+    clinician: item.clinician || existingPatient?.clinician || DEFAULT_CLINICIAN,
+    procedure: item.procedure || existingPatient?.procedure || "Approved Oral Diagnosis Form (ODF)",
+    notes: item.notes || existingPatient?.notes || "Approved faculty procedure and ODF documentation.",
+    phone: item.odfDetails?.cellPhone || existingPatient?.phone || "",
+    email: item.odfDetails?.email || existingPatient?.email || "",
+    gender: item.odfDetails?.sex || existingPatient?.gender || "Male",
+    dateOfBirth: item.odfDetails?.birthDate || existingPatient?.dateOfBirth || "",
+    age: item.odfDetails?.age || existingPatient?.age || "",
+    homeAddress: item.odfDetails?.homeAddress || existingPatient?.homeAddress || "",
+    latestOdfScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || existingPatient?.latestOdfScanUrl || null,
+    latestOdfPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || existingPatient?.latestOdfPage2Url || null,
+    odfData: {
+      ...(existingPatient?.odfData || {}),
+      ...(item.odfDetails || {}),
+    },
   });
 
   // 4. Update Supabase
@@ -717,10 +1018,16 @@ export async function approvePendingInSupabase(item) {
  */
 export async function declinePendingInSupabase(item) {
   const numericId = to8DigitId(item.id);
+  const targetSubId = item.submissionId;
 
   // Update local pending cache
   const localPending = getLocalPending();
-  saveLocalPending(localPending.filter((p) => to8DigitId(p.id) !== numericId));
+  saveLocalPending(
+    localPending.filter((p) => {
+      if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+      return to8DigitId(p.id) !== numericId;
+    })
+  );
 
   try {
     const { error } = await supabase
@@ -882,16 +1189,59 @@ export async function fetchPatientHistoryRecords(patient) {
 
   const recordsList = [...(baselineMap[numericId] || [])];
 
-  // Also include any ODF data stored on the patient object itself
-  if (patient.odfData) {
-    const odf = patient.odfData;
-    const hasAlready = recordsList.some((r) => r.type === "odf" && r.title.includes("ODF"));
-    if (!hasAlready) {
+  // Also include any locally saved records for this patient (most recent first)
+  const localRecs = getLocalRecords().filter((r) => r.patientId === numericId);
+  localRecs.forEach((lr) => {
+    recordsList.unshift({
+      ...lr,
+      dateFormatted: formatDateParts(lr.date),
+    });
+  });
+
+  // Also include any locally pending ODF submissions for this patient so new submissions appear immediately in history
+  const localPendingForPatient = getLocalPending().filter(
+    (p) => to8DigitId(p.eightDigitId || p.id) === numericId
+  );
+  localPendingForPatient.forEach((lp) => {
+    const details = lp.odfDetails || {};
+    const alreadySavedAsApproved = localRecs.some(
+      (lr) => lr.date === lp.visitDate && lr.title === lp.procedure
+    );
+    if (!alreadySavedAsApproved) {
       recordsList.unshift({
-        id: `odf_${numericId}_current`,
-        date: patient.lastVisit || new Date().toLocaleDateString("en-US"),
-        dateFormatted: formatDateParts(patient.lastVisit),
-        title: "Oral Diagnosis Form (ODF) Submission",
+        id: lp.submissionId || `pending_${numericId}_${lp.visitDate || ""}`,
+        date: lp.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+        dateFormatted: formatDateParts(lp.visitDate),
+        title: lp.procedure || "Oral Diagnosis Form (ODF) Submission",
+        type: "odf",
+        typeLabel: "Pending ODF",
+        status: "Pending Sign-off",
+        clinician: lp.clinician || DEFAULT_CLINICIAN,
+        summary: lp.notes || details.historyOfPresentIllness || "ODF Clinical Consultation",
+        notes: lp.notes || details.historyOfPresentIllness || "",
+        hasOdontogram: !!(details.odontogramCropUrl || lp.odontogramCropUrl),
+        rawScanUrl: lp.rawScanUrl || details.rawScanUrl || null,
+        rawScanPage2Url: lp.rawScanPage2Url || details.rawScanPage2Url || null,
+        odontogramCropUrl: details.odontogramCropUrl || lp.odontogramCropUrl || null,
+        consentCropUrl: details.consentCropUrl || lp.consentCropUrl || null,
+        odfDetails: details,
+      });
+    }
+  });
+
+  // Include current patient.odfData if no local/baseline ODF already captures it
+  if (patient.odfData && (patient.odfData.chiefComplaints?.some(Boolean) || patient.odfData.tentativeDiagnosis?.some(Boolean) || patient.odfData.rawScanUrl)) {
+    const odf = patient.odfData;
+    const visitDate = patient.lastVisit || odf.date || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+    const hasMatchingOdf = recordsList.some(
+      (r) => r.type === "odf" && (r.date === visitDate || r.odfDetails === odf)
+    );
+    if (!hasMatchingOdf) {
+      recordsList.unshift({
+        id: `odf_${numericId}_${visitDate}`,
+        date: visitDate,
+        dateFormatted: formatDateParts(visitDate),
+        title: patient.procedure || "Oral Diagnosis Form (ODF) Submission",
         type: "odf",
         typeLabel: "ODF Form",
         status: "Clinical Record",
@@ -899,6 +1249,8 @@ export async function fetchPatientHistoryRecords(patient) {
         summary: patient.procedure || "Clinical oral diagnosis and examination",
         notes: patient.notes || odf.historyOfPresentIllness || "",
         hasOdontogram: !!(odf.odontogramCropUrl || patient.odfData?.odontogramCropUrl),
+        rawScanUrl: odf.rawScanUrl || patient.latestOdfScanUrl || null,
+        rawScanPage2Url: odf.rawScanPage2Url || patient.latestOdfPage2Url || null,
         odontogramCropUrl: odf.odontogramCropUrl,
         consentCropUrl: odf.consentCropUrl,
         odfDetails: odf,
@@ -969,20 +1321,12 @@ export async function fetchPatientHistoryRecords(patient) {
     console.warn("Could not query external history records:", err);
   }
 
-  // Also include any locally saved records for this patient
-  const localRecs = getLocalRecords().filter((r) => r.patientId === numericId);
-  localRecs.forEach((lr) => {
-    recordsList.unshift({
-      ...lr,
-      dateFormatted: formatDateParts(lr.date),
-    });
-  });
-
-  // Deduplicate by ID
+  // Deduplicate by ID and exclude any deleted records
+  const deletedRecordSet = new Set(getDeletedRecordIds());
   const seen = new Set();
   const deduped = [];
   for (const r of recordsList) {
-    if (!seen.has(r.id)) {
+    if (!deletedRecordSet.has(String(r.id)) && !seen.has(r.id)) {
       seen.add(r.id);
       deduped.push({
         ...r,
@@ -991,8 +1335,8 @@ export async function fetchPatientHistoryRecords(patient) {
     }
   }
 
-  // If list is empty for a newly added patient, supply a default baseline initial exam record
-  if (deduped.length === 0) {
+  // If list is empty for a newly added patient (and hasn't been explicitly deleted), supply a baseline initial exam record
+  if (deduped.length === 0 && !deletedRecordSet.has(`init_${numericId}`)) {
     deduped.push({
       id: `init_${numericId}`,
       date: patient.lastVisit || new Date().toLocaleDateString("en-US"),
@@ -1008,6 +1352,89 @@ export async function fetchPatientHistoryRecords(patient) {
   }
 
   return deduped;
+}
+
+/**
+ * Deletes one or more selected clinical/ODF records belonging to a patient.
+ * Available exclusively to Dentistry Department Faculty and System Administrators.
+ */
+export async function deleteSelectedPatientRecords(patient, recordsToDelete = []) {
+  if (!patient || !Array.isArray(recordsToDelete) || recordsToDelete.length === 0) {
+    return { success: false, deletedIds: [] };
+  }
+  const numericId = to8DigitId(patient.id || patient.eightDigitId);
+  const targetIds = recordsToDelete.map((r) => (typeof r === "string" ? r : r.id)).filter(Boolean);
+  const targetIdSet = new Set(targetIds);
+
+  // Persist deleted record IDs (including init_ marker so cleared baseline doesn't re-spawn)
+  addDeletedRecordIds([...targetIds, `init_${numericId}`]);
+
+  // Remove from local treatment records cache
+  const nextLocalRecords = getLocalRecords().filter((r) => !targetIdSet.has(r.id));
+  saveLocalRecordsList(nextLocalRecords);
+
+  // Remove matching pending entries if user deleted a pending ODF row
+  const nextLocalPending = getLocalPending().filter((p) => {
+    const subId = p.submissionId || `pending_${to8DigitId(p.eightDigitId || p.id)}_${p.visitDate || ""}`;
+    if (targetIdSet.has(subId) || targetIdSet.has(p.submissionId)) return false;
+    return true;
+  });
+  saveLocalPending(nextLocalPending);
+
+  // Best-effort remote deletion in Supabase
+  for (const id of targetIds) {
+    try {
+      if (id.startsWith("tr_")) {
+        const dbRecordId = id.slice(3);
+        await supabase.from("treatment_records").delete().eq("id", dbRecordId);
+      } else if (id.startsWith("appr_")) {
+        const apprId = id.split("_")[1];
+        if (apprId) {
+          await supabase.from("pending_approvals").delete().eq("id", apprId);
+        }
+      }
+    } catch (err) {
+      console.warn("[Supabase] Error deleting record:", id, err);
+    }
+  }
+
+  return { success: true, deletedIds: targetIds };
+}
+
+/**
+ * Deletes an entire patient record along with all associated history and pending ODF submissions.
+ * Available exclusively to Dentistry Department Faculty and System Administrators.
+ */
+export async function deleteEntirePatient(patient) {
+  if (!patient) return { success: false };
+  const numericId = to8DigitId(patient.id || patient.eightDigitId);
+
+  // 1. Add patient ID to deleted blocklist so default seeds / stale caches never resurrect it
+  addDeletedPatientIds([numericId]);
+
+  // 2. Remove from local patients, records, and pending caches
+  const nextPatients = getLocalPatients().filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId);
+  saveLocalPatients(nextPatients);
+
+  const nextRecords = getLocalRecords().filter((r) => to8DigitId(r.patientId) !== numericId);
+  saveLocalRecordsList(nextRecords);
+
+  const nextPending = getLocalPending().filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId);
+  saveLocalPending(nextPending);
+
+  // 3. Best-effort deletion from Supabase tables
+  try {
+    await supabase.from("pending_approvals").delete().eq("eight_digit_id", numericId);
+    if (patient.dbId && isUuid(patient.dbId)) {
+      await supabase.from("treatment_records").delete().eq("patient_id", patient.dbId);
+      await supabase.from("patients").delete().eq("id", patient.dbId);
+    }
+    await supabase.from("patients").delete().eq("eight_digit_id", numericId);
+  } catch (err) {
+    console.warn("[Supabase] Error deleting patient:", numericId, err);
+  }
+
+  return { success: true, patientId: numericId };
 }
 
 function formatDateParts(dateStr) {

@@ -52,8 +52,8 @@ export default function Login({ onLogin = () => {} }) {
         alignItems: "center",
         justifyContent: "center",
         padding: "20px 16px",
-        background: "linear-gradient(135deg, #f8fafc 0%, #edf2f7 50%, #fce7f3 100%)",
-        fontFamily: "Inter, system-ui, -apple-system, sans-serif",
+        background: "#ffbfd7",
+        fontFamily: '"Plus Jakarta Sans", system-ui, -apple-system, sans-serif',
       }}
     >
       <div

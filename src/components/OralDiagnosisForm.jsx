@@ -1,7 +1,15 @@
 import { useState, useRef } from "react";
 import Tesseract from "tesseract.js";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
-import { to8DigitId, DEFAULT_CLINICIAN, uploadOdfImageToStorage } from "../lib/dentalService";
+import {
+  to8DigitId,
+  DEFAULT_CLINICIAN,
+  uploadOdfImageToStorage,
+  findExistingPatientByName,
+  generateNextPatientId,
+  getLocalPatients,
+  getLocalPending,
+} from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
   parseAzurePage1ToForm,
@@ -51,11 +59,14 @@ const INITIAL_DIAGNOSTIC_TESTS = [
 export default function OralDiagnosisForm({
   patientId,
   initialData = null,
+  patients = null,
+  pending = null,
+  readOnly = false,
   onSave = () => {},
   onCancel = () => {},
   currentUser,
 }) {
-  const [activePage, setActivePage] = useState("page1"); // "page1" | "page2" | "all"
+  const [activePage, setActivePage] = useState(readOnly ? "all" : "page1"); // "page1" | "page2" | "all"
   const [odontogramView, setOdontogramView] = useState("auto"); // "crop" | "grid" | "auto"
   const [consentView, setConsentView] = useState("auto"); // "crop" | "form" | "auto"
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
@@ -67,9 +78,21 @@ export default function OralDiagnosisForm({
   const fileInputPage2Ref = useRef(null);
   const speechRecognitionRef = useRef(null);
 
+  const knownPatients = patients && patients.length > 0 ? patients : getLocalPatients();
+  const knownPending = pending && pending.length > 0 ? pending : getLocalPending();
+  const isPreboundPatient = Boolean(initialData?.eightDigitId && initialData?.name);
+  const [defaultNewId] = useState(() =>
+    patientId || initialData?.eightDigitId || initialData?.id
+      ? to8DigitId(patientId || initialData?.eightDigitId || initialData?.id)
+      : generateNextPatientId(knownPatients, knownPending)
+  );
+  const [matchedPatientInfo, setMatchedPatientInfo] = useState(() =>
+    initialData?.name ? findExistingPatientByName(initialData.name, knownPatients) : null
+  );
+
   // Form State initialized to CEU ODF layout
   const [form, setForm] = useState(() => {
-    const rawId = to8DigitId(patientId || initialData?.eightDigitId || initialData?.id || Date.now());
+    const rawId = defaultNewId;
     return {
       // Demographics
       eightDigitId: rawId,
@@ -171,12 +194,12 @@ export default function OralDiagnosisForm({
       // Section C: Odontogram (Mouth Examination)
       rawScanUrl: initialData?.rawScanUrl || null,
       odontogramCropUrl: initialData?.odontogramCropUrl || null,
-      teethFindings: initialData?.teethFindings || {
+      teethFindings: initialData?.teethFindings || (readOnly ? {} : {
         "19": "C (Caries - Occlusal)",
         "14": "Co (Composite Restoration)",
         "48": "UN (Unerupted)",
         "38": "UN (Unerupted)",
-      },
+      }),
 
       // Page 2: Diagnostic Tests
       diagnosticTests: initialData?.diagnosticTests || INITIAL_DIAGNOSTIC_TESTS,
@@ -239,11 +262,31 @@ export default function OralDiagnosisForm({
     };
   });
 
+  const resolvePatientIdForName = (nameValue, currentId) => {
+    const matched = findExistingPatientByName(nameValue, knownPatients);
+    if (matched) {
+      setMatchedPatientInfo(matched);
+      return to8DigitId(matched.id || matched.eightDigitId);
+    }
+    setMatchedPatientInfo(null);
+    return isPreboundPatient ? currentId : defaultNewId;
+  };
+
   const updateField = (field, value) => {
+    if (readOnly) return;
+    if (field === "name") {
+      setForm((prev) => ({
+        ...prev,
+        name: value,
+        eightDigitId: resolvePatientIdForName(value, prev.eightDigitId),
+      }));
+      return;
+    }
     setForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const updateTreatmentLogRow = (rowIndex, field, value) => {
+    if (readOnly) return;
     setForm((prev) => {
       const rows = [...prev.treatmentLogRows];
       rows[rowIndex] = { ...rows[rowIndex], [field]: value };
@@ -279,6 +322,7 @@ export default function OralDiagnosisForm({
   };
 
   const updateComplaint = (index, value) => {
+    if (readOnly) return;
     setForm((prev) => {
       const updated = [...prev.chiefComplaints];
       updated[index] = value;
@@ -287,6 +331,7 @@ export default function OralDiagnosisForm({
   };
 
   const updateDiagnosis = (index, value) => {
+    if (readOnly) return;
     setForm((prev) => {
       const updated = [...prev.tentativeDiagnosis];
       updated[index] = value;
@@ -295,6 +340,7 @@ export default function OralDiagnosisForm({
   };
 
   const updateTreatmentPlan = (index, value) => {
+    if (readOnly) return;
     setForm((prev) => {
       const updated = [...prev.recommendedTreatmentPlan];
       updated[index] = value;
@@ -303,6 +349,7 @@ export default function OralDiagnosisForm({
   };
 
   const togglePastHistory = (conditionId) => {
+    if (readOnly) return;
     setForm((prev) => {
       const current = prev.pastHistory?.[conditionId];
       let next;
@@ -324,6 +371,7 @@ export default function OralDiagnosisForm({
   };
 
   const toggleAllergyCheck = () => {
+    if (readOnly) return;
     setForm((prev) => {
       const current = prev.allergyCheck;
       let next;
@@ -342,6 +390,7 @@ export default function OralDiagnosisForm({
   };
 
   const setAllPastHistory = (status) => {
+    if (readOnly) return;
     setForm((prev) => {
       const updated = { ...prev.pastHistory };
       MEDICAL_CONDITIONS_COLS.forEach((col) => {
@@ -458,10 +507,13 @@ export default function OralDiagnosisForm({
             // If user uploaded a multi-page PDF containing both Page 1 & Page 2, map Page 2 as well
             const p2Updates =
               (azureRes.pages?.length || 0) >= 2 ? parseAzurePage2ToForm(azureRes, prev) : {};
+            const nextName = p1Updates.name || prev.name;
+            const resolvedId = resolvePatientIdForName(nextName, prev.eightDigitId);
             return {
               ...prev,
               ...p1Updates,
               ...p2Updates,
+              eightDigitId: resolvedId,
             };
           });
         }
@@ -482,10 +534,16 @@ export default function OralDiagnosisForm({
           });
 
           const text = ocrResult?.data?.text || "";
-          setForm((prev) => ({
-            ...prev,
-            ...parseAzurePage1ToForm({ content: text }, prev),
-          }));
+          setForm((prev) => {
+            const p1Updates = parseAzurePage1ToForm({ content: text }, prev);
+            const nextName = p1Updates.name || prev.name;
+            const resolvedId = resolvePatientIdForName(nextName, prev.eightDigitId);
+            return {
+              ...prev,
+              ...p1Updates,
+              eightDigitId: resolvedId,
+            };
+          });
         } catch (ocrErr) {
           console.warn("Local OCR fallback warning:", ocrErr);
         }
@@ -635,6 +693,7 @@ export default function OralDiagnosisForm({
   };
 
   const updateDiagnosticRow = (index, field, value) => {
+    if (readOnly) return;
     setForm((prev) => {
       const tests = [...prev.diagnosticTests];
       tests[index] = { ...tests[index], [field]: value };
@@ -644,6 +703,7 @@ export default function OralDiagnosisForm({
 
   const handleSaveForm = (e) => {
     e.preventDefault();
+    if (readOnly) return;
     const activeClinician =
       form.clinician ||
       (currentUser?.role === "Student Clinician"
@@ -653,8 +713,9 @@ export default function OralDiagnosisForm({
     const submissionPayload = {
       id: form.eightDigitId,
       eightDigitId: form.eightDigitId,
+      submissionId: form.submissionId || `sub_${form.eightDigitId}_${Date.now()}`,
       name: (form.name || "").trim() || "Unnamed Patient",
-      visitDate: form.date || form.examDate || new Date().toISOString().split("T")[0],
+      visitDate: form.date || form.examDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
       clinician: activeClinician,
       submittedBy: currentUser?.email || "student@ceu.edu.ph",
       procedure: form.tentativeDiagnosis?.find(Boolean) || "Comprehensive Oral Examination & ODF",
@@ -710,16 +771,36 @@ export default function OralDiagnosisForm({
           </div>
 
           <div className="ceu-odf-top-bar__actions">
-            <button type="button" className="ceu-btn-secondary" onClick={onCancel}>
-              Cancel
-            </button>
-            <button type="button" className="ceu-btn-primary" onClick={handleSaveForm}>
-              💾 Save & Submit Form
-            </button>
+            {readOnly ? (
+              <>
+                <span className="ceu-odf-readonly-pill">VIEW RECORD (2-PAGE ODF)</span>
+                <button
+                  type="button"
+                  className="ceu-btn-print"
+                  onClick={() => window.print()}
+                  title="Print official CEU Oral Diagnosis Form"
+                >
+                  🖨️ Print Form
+                </button>
+                <button type="button" className="ceu-btn-secondary" onClick={onCancel}>
+                  ✕ Close
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="ceu-btn-secondary" onClick={onCancel}>
+                  Cancel
+                </button>
+                <button type="button" className="ceu-btn-primary" onClick={handleSaveForm}>
+                  💾 Save & Submit Form
+                </button>
+              </>
+            )}
           </div>
         </header>
 
-        {/* OCR / Document Upload Tool Ribbon */}
+        {/* OCR / Document Upload Tool Ribbon (hidden in read-only record view) */}
+        {!readOnly && (
         <div className="ceu-odf-upload-ribbon">
           <div className="ceu-odf-upload-ribbon__title">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -802,10 +883,11 @@ export default function OralDiagnosisForm({
             </div>
           )}
         </div>
+        )}
 
         {/* Form Body - Authentic Paper Replica of Centro Escolar University Oral Diagnosis Form */}
         <div className="ceu-odf-scroll-container">
-          <form onSubmit={handleSaveForm} className="ceu-odf-paper-form">
+          <form onSubmit={handleSaveForm} className={`ceu-odf-paper-form ${readOnly ? "ceu-odf-paper-form--readonly" : ""}`}>
 
             {/* ================= PAGE 1 ================= */}
             {(activePage === "page1" || activePage === "all") && (
@@ -828,6 +910,23 @@ export default function OralDiagnosisForm({
 
                 {/* Patient Information Grid (Underlined blanks matching the physical form layout) */}
                 <section className="ceu-section ceu-section--demographics">
+                  {!readOnly && matchedPatientInfo && (
+                    <div
+                      role="status"
+                      style={{
+                        background: "#fdf2f8",
+                        border: "1px solid #f9a8d4",
+                        color: "#9d174d",
+                        borderRadius: "8px",
+                        padding: "6px 12px",
+                        marginBottom: "8px",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Existing patient matched: <strong>{matchedPatientInfo.name}</strong> (Patient ID #{to8DigitId(matchedPatientInfo.id)}) — This submission will be added to their existing record history.
+                    </div>
+                  )}
                   {/* Row 1: Name, Home Address (No Date field) */}
                   <div className="ceu-form-row ceu-form-row--row1">
                     <div className="ceu-field ceu-field--name">
@@ -995,21 +1094,23 @@ export default function OralDiagnosisForm({
 
                   <div className="ceu-subheading ceu-subheading--with-action">
                     <strong>B. History of Present Illness:</strong>
-                    <button
-                      type="button"
-                      className={`ceu-mic-btn ${isDictatingField === "historyOfPresentIllness" ? "listening" : ""}`}
-                      onClick={() => toggleDictation("historyOfPresentIllness")}
-                      title="Dictate with voice"
-                    >
-                      🎙️ {isDictatingField === "historyOfPresentIllness" ? "Listening..." : "Dictate"}
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className={`ceu-mic-btn ${isDictatingField === "historyOfPresentIllness" ? "listening" : ""}`}
+                        onClick={() => toggleDictation("historyOfPresentIllness")}
+                        title="Dictate with voice"
+                      >
+                        🎙️ {isDictatingField === "historyOfPresentIllness" ? "Listening..." : "Dictate"}
+                      </button>
+                    )}
                   </div>
                   <textarea
                     rows={3}
                     className="ceu-ruled-textarea"
                     value={form.historyOfPresentIllness}
                     onChange={(e) => updateField("historyOfPresentIllness", e.target.value)}
-                    placeholder="Describe onset, duration, character, and exacerbating factors..."
+                    placeholder={readOnly ? "" : "Describe onset, duration, character, and exacerbating factors..."}
                   />
                 </section>
 
@@ -1017,32 +1118,34 @@ export default function OralDiagnosisForm({
                 <section className="ceu-section ceu-section--past-history">
                   <div className="ceu-subheading ceu-subheading--between">
                     <strong>C. Past History: Mark(/) if any conditions are present and (X) if none.</strong>
-                    <div className="ceu-history-quick-actions">
-                      <button
-                        type="button"
-                        className="ceu-quick-btn"
-                        onClick={() => setAllPastHistory("none")}
-                        title="Mark all conditions as (X) None"
-                      >
-                        Mark All (X)
-                      </button>
-                      <button
-                        type="button"
-                        className="ceu-quick-btn"
-                        onClick={() => setAllPastHistory("present")}
-                        title="Mark all conditions as (/) Present"
-                      >
-                        Mark All (/)
-                      </button>
-                      <button
-                        type="button"
-                        className="ceu-quick-btn"
-                        onClick={() => setAllPastHistory("")}
-                        title="Clear all condition marks"
-                      >
-                        Clear All
-                      </button>
-                    </div>
+                    {!readOnly && (
+                      <div className="ceu-history-quick-actions">
+                        <button
+                          type="button"
+                          className="ceu-quick-btn"
+                          onClick={() => setAllPastHistory("none")}
+                          title="Mark all conditions as (X) None"
+                        >
+                          Mark All (X)
+                        </button>
+                        <button
+                          type="button"
+                          className="ceu-quick-btn"
+                          onClick={() => setAllPastHistory("present")}
+                          title="Mark all conditions as (/) Present"
+                        >
+                          Mark All (/)
+                        </button>
+                        <button
+                          type="button"
+                          className="ceu-quick-btn"
+                          onClick={() => setAllPastHistory("")}
+                          title="Clear all condition marks"
+                        >
+                          Clear All
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div className="ceu-medical-label-tag">Medical</div>
 
@@ -1648,13 +1751,15 @@ export default function OralDiagnosisForm({
                           >
                             🔍 Zoom & Inspect
                           </button>
-                          <button
-                            type="button"
-                            className="ceu-recrop-btn"
-                            onClick={() => fileInputPage1Ref.current?.click()}
-                          >
-                            🔄 Re-upload / Crop
-                          </button>
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              className="ceu-recrop-btn"
+                              onClick={() => fileInputPage1Ref.current?.click()}
+                            >
+                              🔄 Re-upload / Crop
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="ceu-cropped-image-wrapper">
@@ -1678,6 +1783,7 @@ export default function OralDiagnosisForm({
                                 className="ceu-tooth-stat-input"
                                 value={form.teethFindings[t] || ""}
                                 onChange={(e) => {
+                                  if (readOnly) return;
                                   const val = e.target.value;
                                   setForm((prev) => ({
                                     ...prev,
@@ -1784,13 +1890,15 @@ export default function OralDiagnosisForm({
                 <section className="ceu-section">
                   <div className="ceu-section-header ceu-section-header--between">
                     <h4>D. DIAGNOSTIC TEST</h4>
-                    <button
-                      type="button"
-                      className="ceu-table-add-btn"
-                      onClick={handleAddDiagnosticRow}
-                    >
-                      + Add Tooth Test Row
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className="ceu-table-add-btn"
+                        onClick={handleAddDiagnosticRow}
+                      >
+                        + Add Tooth Test Row
+                      </button>
+                    )}
                   </div>
 
                   <div className="ceu-table-responsive">
@@ -1894,14 +2002,16 @@ export default function OralDiagnosisForm({
                 <section className="ceu-section">
                   <div className="ceu-subheading ceu-subheading--with-action">
                     <strong>Radiographic Interpretation:</strong>
-                    <button
-                      type="button"
-                      className={`ceu-mic-btn ${isDictatingField === "radiographicInterpretation" ? "listening" : ""}`}
-                      onClick={() => toggleDictation("radiographicInterpretation")}
-                      title="Dictate with voice"
-                    >
-                      🎙️ {isDictatingField === "radiographicInterpretation" ? "Listening..." : "Dictate"}
-                    </button>
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className={`ceu-mic-btn ${isDictatingField === "radiographicInterpretation" ? "listening" : ""}`}
+                        onClick={() => toggleDictation("radiographicInterpretation")}
+                        title="Dictate with voice"
+                      >
+                        🎙️ {isDictatingField === "radiographicInterpretation" ? "Listening..." : "Dictate"}
+                      </button>
+                    )}
                   </div>
                   <textarea
                     rows={2}
@@ -2150,13 +2260,15 @@ export default function OralDiagnosisForm({
                           >
                             🔍 Zoom & Inspect
                           </button>
-                          <button
-                            type="button"
-                            className="ceu-recrop-btn"
-                            onClick={() => fileInputPage2Ref.current?.click()}
-                          >
-                            🔄 Re-upload / Crop
-                          </button>
+                          {!readOnly && (
+                            <button
+                              type="button"
+                              className="ceu-recrop-btn"
+                              onClick={() => fileInputPage2Ref.current?.click()}
+                            >
+                              🔄 Re-upload / Crop
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="ceu-cropped-image-wrapper">
@@ -2278,7 +2390,7 @@ export default function OralDiagnosisForm({
             {/* Bottom Actions */}
             <div className="ceu-odf-bottom-bar">
               <button type="button" className="ceu-btn-secondary" onClick={onCancel}>
-                Cancel & Close
+                {readOnly ? "Close" : "Cancel & Close"}
               </button>
               <div className="ceu-bottom-right-actions">
                 <button
@@ -2289,9 +2401,11 @@ export default function OralDiagnosisForm({
                 >
                   🖨️ Print Form
                 </button>
-                <button type="submit" className="ceu-btn-primary">
-                  💾 Submit Oral Diagnosis Form
-                </button>
+                {!readOnly && (
+                  <button type="submit" className="ceu-btn-primary">
+                    💾 Submit Oral Diagnosis Form
+                  </button>
+                )}
               </div>
             </div>
 

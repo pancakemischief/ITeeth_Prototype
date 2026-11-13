@@ -1,27 +1,34 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Layout from "./Layout";
 import OralDiagnosisForm from "./OralDiagnosisForm";
 import DocumentViewerModal from "./DocumentViewerModal";
 import { normalizeRole, canApproveODF, isStudentClinician } from "../lib/roleUtils";
-import { to8DigitId, DEFAULT_CLINICIAN } from "../lib/dentalService";
+import { to8DigitId, DEFAULT_CLINICIAN, generateNextPatientId } from "../lib/dentalService";
 
 const MOCK_PENDING = [
-  { id: "10000005", name: "Grace Brewster", visitDate: "03/22/2026", clinician: "student@ceu.edu.ph (Student Clinician)", submittedBy: "student@ceu.edu.ph" },
+  {
+    id: "10000005",
+    name: "Grace Brewster",
+    visitDate: "03/22/2026",
+    clinician: "student@ceu.edu.ph (Student Clinician)",
+    submittedBy: "student@ceu.edu.ph",
+  },
 ];
-const ROWS = 7;
+const ROWS = 11;
 
 export default function PendingApproval({
   onNavigate,
   pending = MOCK_PENDING,
+  patients = [],
   onReview = () => {},
   onApprove = () => {},
   onDecline = () => {},
   onAddPending = () => {},
-  isSyncing = false,
   currentUser,
   onSignOut,
 }) {
   const [query, setQuery] = useState("");
+  const [filterBy, setFilterBy] = useState("all");
   const [showAddModal, setShowAddModal] = useState(false);
   const [viewingDocTarget, setViewingDocTarget] = useState(null);
 
@@ -33,26 +40,58 @@ export default function PendingApproval({
   const userClinicianName = userEmail.split("@")[0].toLowerCase();
 
   // Role Filtering:
-  // Student Clinicians can ONLY view what they submitted
-  // Faculty & System Admins can view and approve all submissions
-  const roleFiltered = pending.filter((p) => {
-    if (isStudent) {
-      const subBy = (p.submittedBy || p.clinicianEmail || "").toLowerCase();
-      const clin = (p.clinician || "").toLowerCase();
-      const isMine =
-        (subBy && subBy === userEmail) ||
-        (clin && userClinicianName && clin.includes(userClinicianName)) ||
-        clin.includes("student@ceu.edu.ph") ||
-        to8DigitId(p.id) === "10000005"; // Default student submission
-      return isMine;
-    }
-    return true;
-  });
+  // Student Clinicians view what they submitted
+  // Faculty & System Admins view and approve all submissions
+  const roleFiltered = useMemo(() => {
+    return pending.filter((p) => {
+      if (isStudent) {
+        const subBy = (p.submittedBy || p.clinicianEmail || "").toLowerCase();
+        const clin = (p.clinician || "").toLowerCase();
+        const isMine =
+          (subBy && subBy === userEmail) ||
+          (clin && userClinicianName && clin.includes(userClinicianName)) ||
+          clin.includes("student@ceu.edu.ph") ||
+          to8DigitId(p.id) === "10000005";
+        return isMine;
+      }
+      return true;
+    });
+  }, [pending, isStudent, userEmail, userClinicianName]);
 
-  const filtered = roleFiltered.filter((p) => {
-    const formattedId = to8DigitId(p.id);
-    return `${formattedId} ${p.name} ${p.clinician || ""}`.toLowerCase().includes(query.toLowerCase());
-  });
+  const clinicianOptions = useMemo(() => {
+    const set = new Set();
+    roleFiltered.forEach((p) => {
+      if (p.clinician) set.add(p.clinician);
+    });
+    return Array.from(set);
+  }, [roleFiltered]);
+
+  const filtered = useMemo(() => {
+    const searchLower = query.trim().toLowerCase();
+    const list = roleFiltered.filter((p) => {
+      const formattedId = to8DigitId(p.id);
+      const matchesSearch =
+        !searchLower ||
+        `${formattedId} ${p.name} ${p.clinician || ""} ${p.visitDate || ""}`
+          .toLowerCase()
+          .includes(searchLower);
+
+      if (!matchesSearch) return false;
+      if (filterBy.startsWith("clinician:")) {
+        return (p.clinician || DEFAULT_CLINICIAN) === filterBy.slice("clinician:".length);
+      }
+      return true;
+    });
+
+    if (filterBy === "name_az") {
+      return [...list].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+    }
+    if (filterBy === "recent") {
+      return [...list].sort((a, b) => new Date(b.visitDate || 0) - new Date(a.visitDate || 0));
+    }
+    return list;
+  }, [roleFiltered, query, filterBy]);
+
   const blanks = Math.max(0, ROWS - filtered.length);
 
   return (
@@ -62,55 +101,14 @@ export default function PendingApproval({
       currentUser={currentUser}
       onSignOut={onSignOut}
     >
-      {/* Role Notice Banner */}
-      {isStudent && (
-        <div
-          style={{
-            background: "#fdf2f8",
-            border: "1.5px solid #fbcfe8",
-            borderRadius: "14px",
-            padding: "12px 18px",
-            marginBottom: "16px",
-            fontSize: "13px",
-            color: "#9d174d",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: "8px",
-          }}
-        >
-          <span>
-            📋 <strong>Student Clinician Workspace:</strong> Viewing your submitted ODF requests ({filtered.length} pending). Under department protocol, only Supervising Faculty and System Administrators can approve or decline ODF forms.
-          </span>
-        </div>
-      )}
+      <div className="page-header-row">
+        <h1 className="page-title">
+          {isStudent ? "ODF Submissions" : "Pending Approvals"}
+        </h1>
+      </div>
 
-      {allowApprove && (
-        <div
-          style={{
-            background: "#f0fdf4",
-            border: "1.5px solid #bbf7d0",
-            borderRadius: "14px",
-            padding: "12px 18px",
-            marginBottom: "16px",
-            fontSize: "13px",
-            color: "#166534",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            flexWrap: "wrap",
-            gap: "8px",
-          }}
-        >
-          <span>
-            ⚡ <strong>Faculty Review Gate:</strong> You have clinical authority to evaluate, review attached physical documents, approve, or request revisions on student ODF submissions.
-          </span>
-        </div>
-      )}
-
-      <div className="toolbar" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px" }}>
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+      <div className="toolbar">
+        <div className="toolbar__left">
           <div className="search-input-wrapper">
             <svg
               className="search-icon"
@@ -122,22 +120,54 @@ export default function PendingApproval({
               strokeWidth="2.2"
               strokeLinecap="round"
               strokeLinejoin="round"
+              aria-hidden="true"
             >
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
             <input
               className="pill pill--search"
-              placeholder="Search approvals (8-digit ID or name)..."
+              placeholder="Search Patients"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search Patients"
             />
           </div>
 
-          <button className="pill" type="button" onClick={() => setQuery("")}>
-            {query ? "Clear Filter" : isStudent ? "My Submissions" : "All Submissions"}
-          </button>
+          <div className="filter-select-wrap">
+            <select
+              className="filter-select"
+              value={filterBy}
+              onChange={(e) => setFilterBy(e.target.value)}
+              aria-label="Filter by"
+            >
+              <option value="all">Filter by</option>
+              <option value="recent">Most Recent Visit</option>
+              <option value="name_az">Name (A – Z)</option>
+              {clinicianOptions.map((clin) => (
+                <option key={clin} value={`clinician:${clin}`}>
+                  Clinician: {clin}
+                </option>
+              ))}
+            </select>
+            <svg
+              className="filter-select-chevron"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="6 9 12 15 18 9" />
+            </svg>
+          </div>
+        </div>
 
+        <div className="toolbar__right">
           <button
             className="pill pill--primary"
             type="button"
@@ -146,110 +176,105 @@ export default function PendingApproval({
             + New ODF Submission
           </button>
         </div>
-
-        {isSyncing && (
-          <span style={{ fontSize: "12px", color: "#64748b", fontWeight: 500, display: "flex", alignItems: "center", gap: "6px" }}>
-            <span
-              style={{
-                width: "8px",
-                height: "8px",
-                borderRadius: "50%",
-                background: "#e91e77",
-                display: "inline-block",
-                animation: "pulse 1.5s infinite",
-              }}
-            />
-            Syncing with Supabase...
-          </span>
-        )}
       </div>
 
       <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Patient / Request ID</th>
-              <th>Patient Name</th>
-              <th>Visit Date (MM/DD/YYYY)</th>
-              <th>Attending Clinician</th>
-              <th style={{ textAlign: "right", paddingRight: "20px" }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((p) => {
-              const formatted8DigitId = to8DigitId(p.id);
-              return (
-                <tr key={p.id}>
-                  <td style={{ fontFamily: "monospace", fontSize: "13px", fontWeight: "700", color: "#0f172a", letterSpacing: "0.5px" }}>
-                    {formatted8DigitId}
-                  </td>
-                  <td style={{ fontWeight: 600, color: "#1e293b" }}>{p.name}</td>
-                  <td>{p.visitDate}</td>
-                  <td>{p.clinician || DEFAULT_CLINICIAN}</td>
-                  <td style={{ textAlign: "right", paddingRight: "20px" }}>
-                    {/* View Document Button - available to ALL roles */}
-                    <button
-                      className="table__action"
-                      style={{ background: "#f8fafc", borderColor: "#cbd5e1", color: "#0f172a", fontWeight: "700" }}
-                      onClick={() => setViewingDocTarget(p)}
-                      title="Inspect full scanned CEU Oral Diagnosis Form document"
-                    >
-                      📄 View Doc
-                    </button>
+        <div className="table-scroll">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Patient ID</th>
+                <th>Name</th>
+                <th>Last Visit (MM/DD/YYYY)</th>
+                <th>Attending Clinician</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p) => {
+                const formatted8DigitId = to8DigitId(p.id);
+                const rowKey = p.submissionId || `${formatted8DigitId}-${p.visitDate || ""}`;
+                return (
+                  <tr key={rowKey}>
+                    <td className="table__id-cell">{formatted8DigitId}</td>
+                    <td style={{ fontWeight: 600 }}>{p.name}</td>
+                    <td className="table__date-cell">{p.visitDate}</td>
+                    <td>{p.clinician || DEFAULT_CLINICIAN}</td>
+                    <td className="table__actions-cell">
+                      <div className="table__actions-group">
+                        {allowApprove ? (
+                          <>
+                            {/* Faculty & System Admin: "View Doc" renamed to "Review Submission", "Review ODF" removed */}
+                            <button
+                              type="button"
+                              className="table__action table__action--review"
+                              onClick={() => setViewingDocTarget(p)}
+                              title="Inspect full scanned CEU Oral Diagnosis Form document"
+                            >
+                              Review Submission
+                            </button>
+                            <button
+                              type="button"
+                              className="table__action table__action--approve"
+                              onClick={() => onApprove(p)}
+                              title="Faculty Approval for Treatment"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className="table__action table__action--decline"
+                              onClick={() => onDecline(p)}
+                              title="Decline or Request Revision"
+                            >
+                              Decline
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {/* Student Clinician: "View Doc" removed, keep View Submission + awaiting status */}
+                            <button
+                              type="button"
+                              className="table__action table__action--review"
+                              onClick={() => onReview(p)}
+                            >
+                              View Submission
+                            </button>
+                            <span className="status-awaiting-text">
+                              Awaiting Faculty Sign-Off
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
 
-                    <button className="table__action" onClick={() => onReview(p)}>
-                      {isStudent ? "View Submission" : "Review ODF"}
-                    </button>
-
-                    {allowApprove ? (
-                      <>
-                        <button
-                          className="table__action table__action--approve"
-                          onClick={() => onApprove(p)}
-                          title="Faculty Approval for Treatment"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="table__action table__action--decline"
-                          onClick={() => onDecline(p)}
-                          title="Decline or Request Revision"
-                        >
-                          Decline
-                        </button>
-                      </>
-                    ) : (
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          color: "#d97706",
-                          background: "#fef3c7",
-                          padding: "4px 10px",
-                          borderRadius: "999px",
-                          fontWeight: "700",
-                          marginLeft: "4px",
-                        }}
-                      >
-                        ⏳ Awaiting Faculty Sign-Off
-                      </span>
-                    )}
+              {filtered.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: "26px", color: "#64748b", fontWeight: 600 }}>
+                    {isStudent ? "No ODF submissions pending faculty sign-off." : "No pending ODF approvals."}
                   </td>
                 </tr>
-              );
-            })}
-            {Array.from({ length: blanks }, (_, i) => (
-              <tr key={`blank-${i}`}>
-                <td colSpan={5} style={{ height: "46px" }} />
-              </tr>
-            ))}
-          </tbody>
-        </table>
+              )}
+
+              {Array.from({ length: blanks }, (_, i) => (
+                <tr key={`blank-${i}`}>
+                  <td colSpan={5} style={{ height: "42px" }} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Add Request Modal */}
+      {/* Add ODF Submission Modal */}
       {showAddModal && (
         <OralDiagnosisForm
-          patientId={to8DigitId(pending.length + 10)}
+          patientId={generateNextPatientId(patients, pending)}
+          patients={patients}
+          pending={pending}
           currentUser={currentUser}
           onCancel={() => setShowAddModal(false)}
           onSave={(odfData) => {
@@ -259,7 +284,7 @@ export default function PendingApproval({
         />
       )}
 
-      {/* Scanned Document Viewer Modal */}
+      {/* Scanned Document Viewer Modal (opened by Faculty/Admin "Review Submission") */}
       {viewingDocTarget && (
         <DocumentViewerModal
           record={viewingDocTarget}

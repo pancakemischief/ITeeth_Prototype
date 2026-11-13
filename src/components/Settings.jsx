@@ -61,10 +61,13 @@ export default function Settings({
     <Layout
       active="settings"
       onNavigate={onNavigate}
-      showHome={false}
       currentUser={currentUser}
       onSignOut={onSignOut}
     >
+      <div className="page-header-row">
+        <h1 className="page-title">Settings</h1>
+      </div>
+
       <div style={{ display: "flex", gap: "24px", alignItems: "flex-start", flexWrap: "wrap" }}>
         {/* Left Section Nav */}
         <div

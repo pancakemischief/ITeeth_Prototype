@@ -1490,3 +1490,38 @@
     flex-wrap: wrap;
   }
 }
+
+/* Read-Only Record View Mode */
+.ceu-odf-readonly-pill {
+  padding: 5px 10px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #38bdf8;
+  white-space: nowrap;
+}
+
+.ceu-odf-paper-form--readonly input,
+.ceu-odf-paper-form--readonly textarea,
+.ceu-odf-paper-form--readonly select,
+.ceu-odf-paper-form--readonly .ceu-med-row,
+.ceu-odf-paper-form--readonly .ceu-med-check-box,
+.ceu-odf-paper-form--readonly .ceu-denture-row label {
+  pointer-events: none;
+  cursor: default;
+}
+
+.ceu-odf-paper-form--readonly select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 4px;
+}
+
+.ceu-odf-paper-form--readonly .ceu-view-switch button,
+.ceu-odf-paper-form--readonly .ceu-cropped-actions button {
+  pointer-events: auto;
+  cursor: pointer;
+}

@@ -1,24 +1,45 @@
 import "./Layout.css";
 import { normalizeRole, canViewPendingApprovals } from "../lib/roleUtils";
 
+function formatAccountName(user) {
+  if (user?.name) return user.name;
+  const email = user?.email || "";
+  if (!email) return "Account Name";
+  const local = email.split("@")[0];
+  if (local === "student") return "Jane Doe (Student)";
+  if (local === "faculty") return "Dr. Jane Doe";
+  if (local === "admin") return "System Admin";
+  return local
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getInitials(name, email) {
+  const source = name || email || "U";
+  const parts = source.replace(/[^a-zA-Z\s]/g, " ").trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+  }
+  return source.slice(0, 2).toUpperCase();
+}
+
 export default function Layout({
   active,
   onNavigate = () => {},
-  showHome = true,
   currentUser = { role: "Student Clinician", email: "student@ceu.edu.ph" },
   onSignOut = () => {},
   children,
 }) {
   const normRole = normalizeRole(currentUser?.role);
 
-  // Dynamic tab slots based on User Role specifications
   const tabs = [];
-
   if (normRole === "patient") {
     tabs.push({ key: "patients", label: "My Patient Record" });
     tabs.push({ key: "settings", label: "Settings & Profile" });
   } else {
-    tabs.push({ key: "patients", label: "Patients Database" });
+    tabs.push({ key: "patients", label: "Patient Records" });
     if (canViewPendingApprovals(normRole)) {
       tabs.push({
         key: "approvals",
@@ -28,58 +49,62 @@ export default function Layout({
     tabs.push({ key: "settings", label: "Settings" });
   }
 
+  const displayName = formatAccountName(currentUser);
+  const displayRole = currentUser?.role || "Clinician";
+  const initials = getInitials(currentUser?.name, currentUser?.email);
+
   return (
-    <div className="screen">
-      {/* Brand Header Banner */}
-      <header className="brand-header">
-        <div className="brand-header__left">
-          <div className="brand-badge-icon" aria-hidden="true">
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#ffffff"
-              strokeWidth="2.2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <rect x="3" y="7" width="18" height="13" rx="2" />
-              <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-              <line x1="12" y1="11" x2="12" y2="15" />
-              <line x1="10" y1="13" x2="14" y2="13" />
-            </svg>
+    <div className="iteeth-shell">
+      {/* Left Pink Sidebar */}
+      <aside className="iteeth-sidebar" aria-label="Primary Navigation">
+        <div className="iteeth-sidebar__top">
+          <div className="iteeth-sidebar__brand">
+            <div className="iteeth-sidebar__brand-title">I-Teeth</div>
+            <div className="iteeth-sidebar__brand-sub">EDR for CEU</div>
           </div>
-          <div>
-            <h1 className="brand-title">I-Teeth</h1>
-            <p className="brand-subtitle">Patient Management System</p>
-          </div>
+
+          <nav className="iteeth-sidebar__nav">
+            {tabs.map((t) => {
+              const isActive = active === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  className={`iteeth-sidebar__tab ${isActive ? "iteeth-sidebar__tab--active" : ""}`}
+                  onClick={() => onNavigate(t.key)}
+                  aria-current={isActive ? "page" : undefined}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </nav>
         </div>
 
-        <div className="brand-header__right">
-          <div className="role-pill">
-            <span
-              style={{
-                width: "7px",
-                height: "7px",
-                borderRadius: "50%",
-                background: normRole === "admin" ? "#38bdf8" : normRole === "patient" ? "#fbbf24" : "#4ade80",
-                display: "inline-block",
-              }}
-            />
-            <span>{currentUser?.role || "Clinician"}</span>
-            {currentUser?.employeeId && (
-              <span style={{ opacity: 0.85, fontSize: "10.5px" }}>
-                ({currentUser.employeeId})
-              </span>
-            )}
+        {/* Bottom User Profile Area */}
+        <div className="iteeth-sidebar__footer">
+          <div className="iteeth-sidebar__user">
+            <div className="iteeth-sidebar__avatar" aria-hidden="true">
+              {initials}
+            </div>
+            <div className="iteeth-sidebar__user-meta">
+              <div className="iteeth-sidebar__user-name" title={currentUser?.email || displayName}>
+                {displayName}
+              </div>
+              <div className="iteeth-sidebar__user-role" title={displayRole}>
+                {displayRole}
+              </div>
+              {currentUser?.employeeId && (
+                <div className="iteeth-sidebar__user-id">{currentUser.employeeId}</div>
+              )}
+            </div>
           </div>
 
           <button
             type="button"
-            className="signout-btn"
+            className="iteeth-sidebar__signout"
             onClick={onSignOut}
-            title="Sign out or switch role"
+            title="Sign out or switch account"
           >
             <svg
               width="14"
@@ -87,9 +112,10 @@ export default function Layout({
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2.5"
+              strokeWidth="2.4"
               strokeLinecap="round"
               strokeLinejoin="round"
+              aria-hidden="true"
             >
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
@@ -98,36 +124,12 @@ export default function Layout({
             <span>Sign Out</span>
           </button>
         </div>
-      </header>
+      </aside>
 
-      {/* Main Tab Navigation */}
-      <nav className="navbar" aria-label="Main Navigation">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            className={`navbar__tab ${active === t.key ? "navbar__tab--active" : ""}`}
-            onClick={() => onNavigate(t.key)}
-            aria-current={active === t.key ? "page" : undefined}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="screen__body">{children}</main>
-
-      {showHome && (
-        <button
-          className="home-btn"
-          aria-label="Home"
-          onClick={() => onNavigate("patients")}
-          title="Return to Home"
-        >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z" />
-          </svg>
-        </button>
-      )}
+      {/* Main Content Canvas */}
+      <main className="iteeth-main">
+        <div className="iteeth-main__inner">{children}</div>
+      </main>
     </div>
   );
 }
