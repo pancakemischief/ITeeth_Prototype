@@ -15,6 +15,7 @@ import {
   parseAzurePage1ToForm,
   parseAzurePage2ToForm,
 } from "../lib/azureOdfParser";
+import { useWhisperDictation } from "../lib/whisperClient";
 import { isStudentClinician } from "../lib/roleUtils";
 import "./OralDiagnosisForm.css";
 
@@ -80,12 +81,10 @@ export default function OralDiagnosisForm({
   const [consentView, setConsentView] = useState("auto"); // "crop" | "form" | "auto"
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
   const [ocrProgressText, setOcrProgressText] = useState("");
-  const [isDictatingField, setIsDictatingField] = useState(null);
   const [expandedImage, setExpandedImage] = useState(null);
 
   const fileInputPage1Ref = useRef(null);
   const fileInputPage2Ref = useRef(null);
-  const speechRecognitionRef = useRef(null);
 
   const knownPatients = patients && patients.length > 0 ? patients : getLocalPatients();
   const knownPending = pending && pending.length > 0 ? pending : getLocalPending();
@@ -411,48 +410,29 @@ export default function OralDiagnosisForm({
     });
   };
 
-  // Web Speech API Voice Dictation
-  const toggleDictation = (field) => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      setOcrProgressText("✕ Speech recognition is not supported in this browser. Please use Chrome or Edge.");
-      setTimeout(() => setOcrProgressText(""), 4500);
-      return;
-    }
-
-    if (isDictatingField === field) {
-      if (speechRecognitionRef.current) speechRecognitionRef.current.stop();
-      setIsDictatingField(null);
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = "en-US";
-
-      recognition.onstart = () => setIsDictatingField(field);
-      recognition.onend = () => setIsDictatingField(null);
-      recognition.onerror = () => setIsDictatingField(null);
-
-      recognition.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          setForm((prev) => ({
-            ...prev,
-            [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
-          }));
-        }
-      };
-
-      speechRecognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn("Speech recognition error:", err);
-      setIsDictatingField(null);
-    }
-  };
+  // Local OpenAI whisper.cpp Voice Dictation
+  const {
+    recordingField,
+    transcribingField,
+    toggleFieldDictation: toggleDictation,
+  } = useWhisperDictation({
+    onTranscript: (field, transcript) => {
+      setForm((prev) => ({
+        ...prev,
+        [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
+      }));
+    },
+    onStatusChange: (msg) => {
+      setOcrProgressText(msg);
+      if (msg.startsWith("✓")) {
+        setTimeout(() => setOcrProgressText(""), 5000);
+      }
+    },
+    onError: (errMsg) => {
+      setOcrProgressText(`✕ ${errMsg}`);
+      setTimeout(() => setOcrProgressText(""), 5000);
+    },
+  });
 
   // OCR/ICR & Image Processing for Page 1 (Front: Demographics, Past History, Clinical Exam & Odontogram)
   const processPage1Image = async (fileOrUrl) => {
@@ -1102,11 +1082,22 @@ export default function OralDiagnosisForm({
                     {!readOnly && (
                       <button
                         type="button"
-                        className={`ceu-mic-btn ${isDictatingField === "historyOfPresentIllness" ? "listening" : ""}`}
+                        disabled={Boolean(transcribingField)}
+                        className={`ceu-mic-btn ${
+                          recordingField === "historyOfPresentIllness"
+                            ? "listening"
+                            : transcribingField === "historyOfPresentIllness"
+                            ? "transcribing"
+                            : ""
+                        }`}
                         onClick={() => toggleDictation("historyOfPresentIllness")}
-                        title="Dictate with voice"
+                        title="Dictate locally with OpenAI whisper.cpp"
                       >
-                        🎙️ {isDictatingField === "historyOfPresentIllness" ? "Listening..." : "Dictate"}
+                        {recordingField === "historyOfPresentIllness"
+                          ? "⏹ Stop & Transcribe"
+                          : transcribingField === "historyOfPresentIllness"
+                          ? "⏳ Whisper.cpp..."
+                          : "🎙️ Dictate"}
                       </button>
                     )}
                   </div>
@@ -2010,11 +2001,22 @@ export default function OralDiagnosisForm({
                     {!readOnly && (
                       <button
                         type="button"
-                        className={`ceu-mic-btn ${isDictatingField === "radiographicInterpretation" ? "listening" : ""}`}
+                        disabled={Boolean(transcribingField)}
+                        className={`ceu-mic-btn ${
+                          recordingField === "radiographicInterpretation"
+                            ? "listening"
+                            : transcribingField === "radiographicInterpretation"
+                            ? "transcribing"
+                            : ""
+                        }`}
                         onClick={() => toggleDictation("radiographicInterpretation")}
-                        title="Dictate with voice"
+                        title="Dictate locally with OpenAI whisper.cpp"
                       >
-                        🎙️ {isDictatingField === "radiographicInterpretation" ? "Listening..." : "Dictate"}
+                        {recordingField === "radiographicInterpretation"
+                          ? "⏹ Stop & Transcribe"
+                          : transcribingField === "radiographicInterpretation"
+                          ? "⏳ Whisper.cpp..."
+                          : "🎙️ Dictate"}
                       </button>
                     )}
                   </div>

@@ -15,6 +15,7 @@ import type {
   DocumentTableOutput,
 } from "@azure-rest/ai-document-intelligence";
 import { runAnalyzeWithPaddle, PADDLE_MODEL_ID } from "./src/lib/paddleOdfEngine.js";
+import { runTranscribeWithWhisper, getWhisperStatus } from "./src/lib/whisperCppEngine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -313,6 +314,47 @@ async function startServer() {
     }
   );
 
+  // Local OpenAI whisper.cpp Speech-to-Text readiness status
+  app.get("/api/stt/status", (_req: Request, res: Response) => {
+    res.json(getWhisperStatus());
+  });
+
+  // Transcribe recorded clinical voice dictation locally via whisper.cpp
+  app.post(
+    "/api/stt/whisper",
+    upload.single("audio"),
+    async (req: Request, res: Response) => {
+      if (!req.file || !req.file.buffer) {
+        res.status(400).json({
+          provider: "whisper.cpp",
+          error: "No audio recording uploaded.",
+        });
+        return;
+      }
+
+      try {
+        const language = typeof req.body?.language === "string" ? req.body.language : "en";
+        const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : undefined;
+        const result = await runTranscribeWithWhisper(req.file.buffer, {
+          mimeType: req.file.mimetype,
+          language,
+          prompt,
+        });
+        res.json(result);
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Unexpected error running local whisper.cpp transcription.";
+        console.error("[whisper.cpp STT Error]:", message);
+        res.status(500).json({
+          provider: "whisper.cpp",
+          error: message,
+        });
+      }
+    }
+  );
+
   // Mount Vite middleware in development, or serve static production build
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
@@ -331,10 +373,11 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     const { configured, modelId } = isAzureConfigured();
+    const whisperStatus = getWhisperStatus();
     console.log(
       `[i-Teeth Server] Running on http://localhost:${PORT} | Azure Document Intelligence: ${
         configured ? `ACTIVE (${modelId})` : `NOT CONFIGURED (using PaddleOCR ${PADDLE_MODEL_ID} fallback)`
-      }`
+      } | Local STT: whisper.cpp (${whisperStatus.modelId}, ${whisperStatus.cached ? "cached" : "auto-download"})`
     );
   });
 }

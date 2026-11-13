@@ -436,6 +436,13 @@
   animation: pulse 1.5s infinite;
 }
 
+.ceu-mic-btn.transcribing {
+  background: #e0f2fe;
+  border-color: #0284c7;
+  color: #0369a1;
+  cursor: wait;
+}
+
 /* Underline Blank Fields */
 .ceu-form-row {
   display: flex;

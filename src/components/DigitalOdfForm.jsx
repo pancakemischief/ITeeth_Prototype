@@ -1,7 +1,8 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import { to8DigitId, DEFAULT_CLINICIAN, uploadOdfImageToStorage } from "../lib/dentalService";
 import { analyzeOdfWithPaddle, parseAzurePage1ToForm, parseAzurePage2ToForm } from "../lib/azureOdfParser";
+import { useWhisperDictation } from "../lib/whisperClient";
 
 const MEDICAL_CONDITIONS = [
   "Rheumatic Heart Disease",
@@ -28,7 +29,6 @@ export default function DigitalOdfForm({
   const [activeTab, setActiveTab] = useState("page1"); // "page1" | "page2" | "vision"
   const [isProcessingOcr, setIsProcessingOcr] = useState(false);
   const [ocrStatus, setOcrStatus] = useState("");
-  const [isDictating, setIsDictating] = useState(null); // field name currently listening
 
   // Form State matching CEU Makati paper form exactly
   const [form, setForm] = useState(() => {
@@ -115,50 +115,21 @@ export default function DigitalOdfForm({
     };
   });
 
-  // Voice Dictation (Web Speech API - 100% Free, Browser Native)
-  const speechRecognitionRef = useRef(null);
-
-  const startDictation = (field) => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Speech recognition is not supported in this browser. Please use Chrome or Edge.");
-      return;
-    }
-
-    if (isDictating === field) {
-      if (speechRecognitionRef.current) speechRecognitionRef.current.stop();
-      setIsDictating(null);
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = "en-US"; // also handles common Philippine clinical terms
-
-      recognition.onstart = () => setIsDictating(field);
-      recognition.onend = () => setIsDictating(null);
-      recognition.onerror = () => setIsDictating(null);
-
-      recognition.onresult = (event) => {
-        let transcript = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-        setForm((prev) => ({
-          ...prev,
-          [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
-        }));
-      };
-
-      speechRecognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn("Speech recognition error:", err);
-      setIsDictating(null);
-    }
-  };
+  // Voice Dictation (Local OpenAI whisper.cpp via MediaRecorder)
+  const {
+    recordingField: isDictating,
+    transcribingField,
+    toggleFieldDictation: startDictation,
+  } = useWhisperDictation({
+    onTranscript: (field, transcript) => {
+      setForm((prev) => ({
+        ...prev,
+        [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
+      }));
+    },
+    onStatusChange: (msg) => setOcrStatus(msg),
+    onError: (errMsg) => setOcrStatus(`✕ ${errMsg}`),
+  });
 
   // Handle Page 1 Photo Upload (Auto-crops Odontogram + extracts printed text)
   const handlePage1Upload = async (e) => {
@@ -582,19 +553,33 @@ export default function DigitalOdfForm({
                     </label>
                     <button
                       type="button"
+                      disabled={Boolean(transcribingField)}
                       onClick={() => startDictation("historyOfPresentIllness")}
                       style={{
-                        background: isDictating === "historyOfPresentIllness" ? "#ef4444" : "#f1f5f9",
-                        color: isDictating === "historyOfPresentIllness" ? "#ffffff" : "#0f172a",
+                        background:
+                          isDictating === "historyOfPresentIllness"
+                            ? "#ef4444"
+                            : transcribingField === "historyOfPresentIllness"
+                            ? "#0284c7"
+                            : "#f1f5f9",
+                        color:
+                          isDictating === "historyOfPresentIllness" ||
+                          transcribingField === "historyOfPresentIllness"
+                            ? "#ffffff"
+                            : "#0f172a",
                         border: "1px solid #cbd5e1",
                         borderRadius: "6px",
                         padding: "3px 8px",
                         fontSize: "11px",
                         fontWeight: "700",
-                        cursor: "pointer",
+                        cursor: transcribingField ? "wait" : "pointer",
                       }}
                     >
-                      {isDictating === "historyOfPresentIllness" ? "🔴 Stop Recording" : "🎤 Dictate Note"}
+                      {isDictating === "historyOfPresentIllness"
+                        ? "🔴 Stop & Transcribe"
+                        : transcribingField === "historyOfPresentIllness"
+                        ? "⏳ Whisper.cpp..."
+                        : "🎤 Dictate Note"}
                     </button>
                   </div>
                   <textarea
@@ -726,19 +711,33 @@ export default function DigitalOdfForm({
                   </h3>
                   <button
                     type="button"
+                    disabled={Boolean(transcribingField)}
                     onClick={() => startDictation("radiographicInterpretation")}
                     style={{
-                      background: isDictating === "radiographicInterpretation" ? "#ef4444" : "#f1f5f9",
-                      color: isDictating === "radiographicInterpretation" ? "#ffffff" : "#0f172a",
+                      background:
+                        isDictating === "radiographicInterpretation"
+                          ? "#ef4444"
+                          : transcribingField === "radiographicInterpretation"
+                          ? "#0284c7"
+                          : "#f1f5f9",
+                      color:
+                        isDictating === "radiographicInterpretation" ||
+                        transcribingField === "radiographicInterpretation"
+                          ? "#ffffff"
+                          : "#0f172a",
                       border: "1px solid #cbd5e1",
                       borderRadius: "6px",
                       padding: "3px 8px",
                       fontSize: "11px",
                       fontWeight: "700",
-                      cursor: "pointer",
+                      cursor: transcribingField ? "wait" : "pointer",
                     }}
                   >
-                    {isDictating === "radiographicInterpretation" ? "🔴 Stop Recording" : "🎤 Dictate Note"}
+                    {isDictating === "radiographicInterpretation"
+                      ? "🔴 Stop & Transcribe"
+                      : transcribingField === "radiographicInterpretation"
+                      ? "⏳ Whisper.cpp..."
+                      : "🎤 Dictate Note"}
                   </button>
                 </div>
                 <textarea
