@@ -685,14 +685,6 @@ export default function OralDiagnosisForm({
     }
   };
 
-  const loadSampleScan = (pageNumber) => {
-    if (pageNumber === 1) {
-      processPage1Image("/assets/aistudio/CamScanner_08-27-2026_20.30_1__2__472d9463.jpg");
-    } else {
-      processPage2Image("/assets/aistudio/CamScanner_08-27-2026_20.30_2__2__adf7d62b.jpg");
-    }
-  };
-
   const handleAddDiagnosticRow = () => {
     setForm((prev) => ({
       ...prev,
@@ -869,16 +861,6 @@ export default function OralDiagnosisForm({
               📷 Upload Page 1 Scan
             </button>
 
-            <button
-              type="button"
-              className="ceu-tool-btn ceu-tool-btn--sample"
-              disabled={isProcessingOcr}
-              onClick={() => loadSampleScan(1)}
-              title="Load provided CamScanner Page 1 sample photo"
-            >
-              ⚡ Load Sample Scan (Page 1)
-            </button>
-
             <span className="ceu-divider-vert" />
 
             <button
@@ -891,15 +873,6 @@ export default function OralDiagnosisForm({
               📷 Upload Page 2 Scan
             </button>
 
-            <button
-              type="button"
-              className="ceu-tool-btn ceu-tool-btn--sample"
-              disabled={isProcessingOcr}
-              onClick={() => loadSampleScan(2)}
-              title="Load provided CamScanner Page 2 sample photo"
-            >
-              ⚡ Load Sample Scan (Page 2)
-            </button>
           </div>
 
           {/* OCR Processing & Extraction Notice */}
