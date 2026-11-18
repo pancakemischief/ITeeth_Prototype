@@ -516,13 +516,29 @@
 }
 
 .ceu-field--age {
-  flex: 0 0 70px;
-  min-width: 60px;
+  flex: 0 0 92px;
+  min-width: 86px;
+}
+
+.ceu-field--age .ceu-line-input {
+  min-width: 52px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.ceu-field--age .ceu-line-input::-webkit-inner-spin-button,
+.ceu-field--age .ceu-line-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .ceu-field--sex {
-  flex: 0.7 1 90px;
-  min-width: 75px;
+  flex: 0.5 1 70px;
+  min-width: 62px;
+}
+
+.ceu-field--sex .ceu-line-input {
+  min-width: 32px;
 }
 
 .ceu-field--ht {

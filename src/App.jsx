@@ -880,7 +880,6 @@ function AppRoutes() {
             <Settings
               onNavigate={handleNavigate}
               onSeedSupabase={handleSeedSupabase}
-              onRefreshFromSupabase={() => refreshFromSupabase(true)}
               currentUser={currentUser}
               onSignOut={handleSignOut}
             />

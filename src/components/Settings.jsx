@@ -1,6 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Layout from "./Layout";
-import { testSupabaseConnection } from "../lib/dentalService";
 import { normalizeRole, canAccessDeveloperOptions } from "../lib/roleUtils";
 
 const MOCK_AUDIT_LOGS = [
@@ -13,7 +12,6 @@ const MOCK_AUDIT_LOGS = [
 export default function Settings({
   onNavigate,
   onSeedSupabase = () => {},
-  onRefreshFromSupabase = () => {},
   currentUser,
   onSignOut,
 }) {
@@ -25,27 +23,9 @@ export default function Settings({
   if (isAdmin) {
     sections.push("Developer Options");
   }
-  sections.push("Supabase DB", "Security", "Appearance", "System Info");
+  sections.push("Security", "Appearance", "System Info");
 
   const [section, setSection] = useState(isAdmin ? "Developer Options" : "Account");
-  const [dbStatus, setDbStatus] = useState({ checking: true, connected: false, error: null });
-
-  useEffect(() => {
-    let mounted = true;
-    testSupabaseConnection().then((res) => {
-      if (mounted) {
-        setDbStatus({
-          checking: false,
-          connected: res.connected,
-          tableFound: res.tableFound,
-          error: res.error,
-        });
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
 
   return (
     <Layout
@@ -312,85 +292,6 @@ export default function Settings({
                 >
                   Sign Out
                 </button>
-              </div>
-            </div>
-          )}
-
-          {section === "Supabase DB" && (
-            <div>
-              <h2 style={{ margin: "0 0 14px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
-                Supabase Database Integration
-              </h2>
-
-              <div
-                style={{
-                  background: "#f8fafc",
-                  border: "1.5px solid #e2e8f0",
-                  padding: "16px",
-                  borderRadius: "14px",
-                  marginBottom: "18px",
-                  fontSize: "13px",
-                  lineHeight: 1.6,
-                }}
-              >
-                <div style={{ marginBottom: "6px" }}>
-                  <strong>Service Provider:</strong> Supabase PostgreSQL
-                </div>
-                <div>
-                  <strong>Live Status:</strong>{" "}
-                  {dbStatus.checking ? (
-                    <span style={{ color: "#d97706", fontWeight: "600" }}>● Checking connection...</span>
-                  ) : dbStatus.connected && dbStatus.tableFound ? (
-                    <span style={{ color: "#059669", fontWeight: "700" }}>
-                      ● Connected & Synchronized with Supabase
-                    </span>
-                  ) : dbStatus.connected ? (
-                    <span style={{ color: "#d97706", fontWeight: "700" }}>
-                      ● {dbStatus.error || "Limited sync availability"}
-                    </span>
-                  ) : (
-                    <span style={{ color: "#dc2626", fontWeight: "700" }}>● Error: {dbStatus.error}</span>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: "10px", marginBottom: "18px", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={onRefreshFromSupabase}
-                  style={{
-                    background: "linear-gradient(135deg, #e91e77 0%, #ec206f 100%)",
-                    color: "#fff",
-                    border: 0,
-                    padding: "9px 16px",
-                    borderRadius: "12px",
-                    fontSize: "13px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                    boxShadow: "0 4px 12px rgba(233, 30, 119, 0.3)",
-                  }}
-                >
-                  ↻ Fetch from Supabase
-                </button>
-
-                {canSeedSupabase && (
-                  <button
-                    type="button"
-                    onClick={onSeedSupabase}
-                    style={{
-                      background: "#0f172a",
-                      color: "#fff",
-                      border: 0,
-                      padding: "9px 16px",
-                      borderRadius: "12px",
-                      fontSize: "13px",
-                      fontWeight: "700",
-                      cursor: "pointer",
-                    }}
-                  >
-                    ↑ Seed Supabase
-                  </button>
-                )}
               </div>
             </div>
           )}
