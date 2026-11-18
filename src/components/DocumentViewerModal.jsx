@@ -27,19 +27,34 @@ export default function DocumentViewerModal({
     eightDigitId,
     birthDate: patient?.dateOfBirth || odfDetails?.birthDate || "",
     age: patient?.age || odfDetails?.age || "",
-    sex: patient?.gender || odfDetails?.sex || "Male",
-    homeAddress: patient?.homeAddress || odfDetails?.homeAddress || "Makati City",
+    sex: patient?.gender || odfDetails?.sex || "",
+    homeAddress: patient?.homeAddress || odfDetails?.homeAddress || "",
     cellPhone: patient?.phone || odfDetails?.cellPhone || "",
-    bloodPressure: odfDetails?.bloodPressure || "120/80",
-    pulseRate: odfDetails?.pulseRate || "72 bpm",
-    respiratoryRate: odfDetails?.respiratoryRate || "16 cpm",
-    temperature: odfDetails?.temperature || "36.5 °C",
-    chiefComplaints: odfDetails?.chiefComplaints || [record?.procedure || "Dental Examination"],
+    bloodPressure: odfDetails?.bloodPressure || "",
+    pulseRate: odfDetails?.pulseRate || "",
+    respiratoryRate: odfDetails?.respiratoryRate || "",
+    temperature: odfDetails?.temperature || "",
+    chiefComplaints:
+      Array.isArray(odfDetails?.chiefComplaints) && odfDetails.chiefComplaints.some(Boolean)
+        ? odfDetails.chiefComplaints
+        : record?.procedure
+        ? [record.procedure]
+        : [],
     historyOfPresentIllness: odfDetails?.historyOfPresentIllness || record?.notes || "",
-    tentativeDiagnosis: odfDetails?.tentativeDiagnosis || [record?.procedure || "Dental Caries"],
-    recommendedTreatmentPlan: odfDetails?.recommendedTreatmentPlan || ["Restorative Procedure", "Prophylaxis"],
-    clinician: record?.clinician || patient?.clinician || "Student Clinician",
-    examDate: record?.date || record?.visitDate || odfDetails?.date || patient?.lastVisit || "10/01/2026",
+    tentativeDiagnosis:
+      Array.isArray(odfDetails?.tentativeDiagnosis) && odfDetails.tentativeDiagnosis.some(Boolean)
+        ? odfDetails.tentativeDiagnosis
+        : record?.diagnosis
+        ? [record.diagnosis]
+        : record?.procedure
+        ? [record.procedure]
+        : [],
+    recommendedTreatmentPlan:
+      Array.isArray(odfDetails?.recommendedTreatmentPlan) && odfDetails.recommendedTreatmentPlan.some(Boolean)
+        ? odfDetails.recommendedTreatmentPlan
+        : [],
+    clinician: record?.clinician || patient?.clinician || "",
+    examDate: record?.date || record?.visitDate || odfDetails?.date || patient?.lastVisit || "",
   };
 
   // Resolve image paths/URLs via short-lived signed URLs:

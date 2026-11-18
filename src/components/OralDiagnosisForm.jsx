@@ -2,13 +2,14 @@ import { useState, useRef, useEffect } from "react";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import {
   to8DigitId,
-  DEFAULT_CLINICIAN,
   uploadOdfImageToStorage,
   resolveOdfScanSignedUrl,
   findExistingPatientByName,
   generateNextPatientId,
   getLocalPatients,
   getLocalPending,
+  getTodayManilaIso,
+  getTodayManilaDisplay,
 } from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
@@ -106,7 +107,7 @@ export default function OralDiagnosisForm({
       // Demographics
       eightDigitId: rawId,
       name: initialData?.name || "",
-      date: initialData?.visitDate || new Date().toISOString().split("T")[0],
+      date: initialData?.visitDate || getTodayManilaIso(),
       homeAddress: initialData?.homeAddress || "",
       birthDate: initialData?.birthDate || initialData?.dateOfBirth || "",
       age: initialData?.age || "",
@@ -132,21 +133,8 @@ export default function OralDiagnosisForm({
       historyOfPresentIllness: initialData?.historyOfPresentIllness || initialData?.notes || "",
 
       // Past History: key-value map for conditions: "present" (/), "none" (X), or ""
-      pastHistory: initialData?.pastHistory || {
-        rheumaticHeart: "none",
-        myocardialInfarct: "none",
-        cerebroVascular: "none",
-        asthma: "none",
-        diabetes: "none",
-        liverDisease: "none",
-        stomachUlcers: "none",
-        kidneyDisease: "none",
-        pregnancy: "none",
-        tb: "none",
-        hypertension: "none",
-        hypotension: "none",
-      },
-      allergyCheck: initialData?.allergyCheck || (initialData?.allergySpecify ? "present" : "none"),
+      pastHistory: initialData?.pastHistory || {},
+      allergyCheck: initialData?.allergyCheck || "",
       allergySpecify: initialData?.allergySpecify || "",
       otherIllnesses: initialData?.otherIllnesses || initialData?.otherIllnessSpecify || "",
       medications: initialData?.medications || initialData?.medicationsCurrentlyTaking || "",
@@ -203,12 +191,7 @@ export default function OralDiagnosisForm({
       // Section C: Odontogram (Mouth Examination)
       rawScanUrl: initialData?.rawScanUrl || null,
       odontogramCropUrl: initialData?.odontogramCropUrl || null,
-      teethFindings: initialData?.teethFindings || (readOnly ? {} : {
-        "19": "C (Caries - Occlusal)",
-        "14": "Co (Composite Restoration)",
-        "48": "UN (Unerupted)",
-        "38": "UN (Unerupted)",
-      }),
+      teethFindings: initialData?.teethFindings || {},
 
       // Page 2: Diagnostic Tests
       diagnosticTests: initialData?.diagnosticTests || INITIAL_DIAGNOSTIC_TESTS,
@@ -267,7 +250,11 @@ export default function OralDiagnosisForm({
       consentMinorPatientName: initialData?.consentMinorPatientName || "",
       consentClinicianName: initialData?.consentClinicianName || "",
       consentClinicianDate: initialData?.consentClinicianDate || "",
-      clinician: currentUser?.role || DEFAULT_CLINICIAN,
+      clinician:
+        initialData?.clinician ||
+        (currentUser?.name
+          ? `${currentUser.name} (${currentUser.role})`
+          : currentUser?.email || ""),
     };
   });
 
@@ -745,20 +732,20 @@ export default function OralDiagnosisForm({
   const handleSaveForm = (e) => {
     e.preventDefault();
     if (readOnly) return;
-    const activeClinician =
-      form.clinician ||
-      (currentUser?.role === "Student Clinician"
-        ? `${(currentUser?.email || "student").split("@")[0]} (Student Clinician)`
-        : currentUser?.role || DEFAULT_CLINICIAN);
+    const authenticatedClinician = currentUser?.name
+      ? `${currentUser.name} (${currentUser.role})`
+      : currentUser?.email || "";
+    const activeClinician = form.clinician || authenticatedClinician;
+    const submittedByEmail = currentUser?.email || "";
 
     const submissionPayload = {
       id: form.eightDigitId,
       eightDigitId: form.eightDigitId,
       submissionId: form.submissionId || `sub_${form.eightDigitId}_${Date.now()}`,
       name: (form.name || "").trim() || "Unnamed Patient",
-      visitDate: form.date || form.examDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+      visitDate: form.date || form.examDate || getTodayManilaDisplay(),
       clinician: activeClinician,
-      submittedBy: currentUser?.email || "student@ceu.edu.ph",
+      submittedBy: submittedByEmail,
       procedure: form.tentativeDiagnosis?.find(Boolean) || "Comprehensive Oral Examination & ODF",
       notes: form.historyOfPresentIllness || form.ciRemarks || "Digitized CEU Oral Diagnosis Form",
       rawScanUrl: form.rawScanUrl,
@@ -768,8 +755,8 @@ export default function OralDiagnosisForm({
       odfDetails: {
         ...form,
         clinician: activeClinician,
-        submittedBy: currentUser?.email || "student@ceu.edu.ph",
-        clinicianRole: currentUser?.role || "Student Clinician",
+        submittedBy: submittedByEmail,
+        clinicianRole: currentUser?.role || "",
       },
     };
 

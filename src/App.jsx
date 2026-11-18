@@ -19,11 +19,12 @@ import {
   deleteSelectedPatientRecords,
   deleteEntirePatient,
   to8DigitId,
-  DEFAULT_CLINICIAN,
+  UNASSIGNED_CLINICIAN,
   DEFAULT_PATIENTS,
   DEFAULT_PENDING,
   clearAllLocalPhi,
   resolveOdfScanSignedUrl,
+  getTodayManilaDisplay,
 } from "./lib/dentalService";
 
 function mapProfileRoleToDisplay(dbRole) {
@@ -45,7 +46,10 @@ function mapProfileRoleToDisplay(dbRole) {
 function toIsoDateInput(val) {
   if (!val) return "";
   const str = String(val).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const isoMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, "0")}-${isoMatch[3].padStart(2, "0")}`;
+  }
   const slashMatch = str.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
   if (slashMatch) {
     const m = slashMatch[1].padStart(2, "0");
@@ -55,7 +59,12 @@ function toIsoDateInput(val) {
   }
   const parsed = new Date(str);
   if (!isNaN(parsed.getTime())) {
-    return parsed.toISOString().split("T")[0];
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(parsed);
   }
   return "";
 }
@@ -140,23 +149,23 @@ function buildOdfInitialDataFromRecord(patient, record) {
         : isOdfRec && Array.isArray(pOdf.recommendedTreatmentPlan)
         ? pOdf.recommendedTreatmentPlan
         : [""],
-    examinedBy: rOdf.examinedBy || record?.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+    examinedBy: rOdf.examinedBy || "",
     examDate: toIsoDateInput(rOdf.examDate || recordDate),
     clinicLevel: rOdf.clinicLevel || pOdf.clinicLevel || "",
     treatmentLogRows: hasRecordTreatmentRows && Array.isArray(rOdf.treatmentLogRows) ? rOdf.treatmentLogRows : undefined,
     treatmentLog: fallbackTreatmentLog,
     ciRemarks: rOdf.ciRemarks || record?.notes || (isOdfRec ? pOdf.ciRemarks : "") || "",
-    consentPatientName: rOdf.consentPatientName || pOdf.consentPatientName || patient?.name || "",
-    consentHomeAddress: rOdf.consentHomeAddress || patient?.homeAddress || pOdf.homeAddress || "",
+    consentPatientName: rOdf.consentPatientName || pOdf.consentPatientName || "",
+    consentHomeAddress: rOdf.consentHomeAddress || pOdf.consentHomeAddress || "",
     consentDate: toIsoDateInput(rOdf.consentDate || recordDate),
-    consentClinicianName: rOdf.consentClinicianName || record?.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+    consentClinicianName: rOdf.consentClinicianName || pOdf.consentClinicianName || "",
     consentClinicianDate: toIsoDateInput(rOdf.consentClinicianDate || rOdf.consentDate || recordDate),
     teethFindings: rOdf.teethFindings || fallbackTeeth || (isOdfRec ? pOdf.teethFindings : undefined) || {},
     rawScanUrl: record?.rawScanUrl || rOdf.rawScanUrl || (isOdfRec ? pOdf.rawScanUrl || patient?.latestOdfScanUrl : null) || null,
     rawScanPage2Url: record?.rawScanPage2Url || rOdf.rawScanPage2Url || (isOdfRec ? pOdf.rawScanPage2Url || patient?.latestOdfPage2Url : null) || null,
     odontogramCropUrl: record?.odontogramCropUrl || rOdf.odontogramCropUrl || (isOdfRec ? pOdf.odontogramCropUrl : null) || null,
     consentCropUrl: record?.consentCropUrl || rOdf.consentCropUrl || (isOdfRec ? pOdf.consentCropUrl : null) || null,
-    clinician: record?.clinician || rOdf.clinician || patient?.clinician || DEFAULT_CLINICIAN,
+    clinician: record?.clinician || rOdf.clinician || patient?.clinician || "",
   };
 }
 
@@ -400,7 +409,7 @@ function AppRoutes() {
           if (patientsRes.success && loadedCount > 0) {
             showToast(`✓ Synchronized ${loadedCount} patient records with Supabase`);
           } else if (!patientsRes.success) {
-            showToast("⚡ Using cached patient records (cloud sync unavailable)");
+            showToast("⚠️ Unable to sync patient records with cloud database");
           } else {
             showToast(`✓ Synced with Supabase (${loadedCount} records)`);
           }
@@ -544,7 +553,7 @@ function AppRoutes() {
         eightDigitId: numericId,
         name: pendingItem.name || "Unnamed Patient",
         lastVisit: pendingItem.visitDate || "",
-        clinician: pendingItem.clinician || DEFAULT_CLINICIAN,
+        clinician: pendingItem.clinician || UNASSIGNED_CLINICIAN,
         procedure: pendingItem.procedure || "Oral Diagnosis Form (ODF)",
         notes: pendingItem.notes || "",
         odfData: pendingItem.odfDetails || {},
@@ -552,10 +561,10 @@ function AppRoutes() {
 
     const pseudoRecord = {
       id: pendingItem.submissionId || `pending_${numericId}_${pendingItem.visitDate || ""}`,
-      date: pendingItem.visitDate || new Date().toLocaleDateString("en-US"),
+      date: pendingItem.visitDate || getTodayManilaDisplay(),
       title: pendingItem.procedure || "Oral Diagnosis Form (ODF) Submission",
       type: "odf",
-      clinician: pendingItem.clinician || DEFAULT_CLINICIAN,
+      clinician: pendingItem.clinician || UNASSIGNED_CLINICIAN,
       summary: pendingItem.notes || pendingItem.odfDetails?.historyOfPresentIllness || "",
       notes: pendingItem.notes || pendingItem.odfDetails?.historyOfPresentIllness || "",
       rawScanUrl: pendingItem.rawScanUrl || pendingItem.odfDetails?.rawScanUrl || null,
@@ -576,11 +585,14 @@ function AppRoutes() {
   // Submit Oral Diagnosis Form (ODF) to pending approvals only (never alters master patients pre-approval)
   const handleUploadODF = async (odfItem) => {
     const formattedId = to8DigitId(odfItem.id || odfItem.eightDigitId);
+    const derivedClinician = currentUser?.name
+      ? `${currentUser.name} (${currentUser.role})`
+      : currentUser?.email || UNASSIGNED_CLINICIAN;
     const formattedPending = {
       ...odfItem,
       id: formattedId,
       eightDigitId: formattedId,
-      clinician: odfItem.clinician || DEFAULT_CLINICIAN,
+      clinician: odfItem.clinician || derivedClinician,
     };
 
     showToast(`Submitting ODF for Patient #${formattedId}...`);
@@ -880,7 +892,7 @@ function AppRoutes() {
             sex: odfModalTarget.gender || "Male",
             age: odfModalTarget.age || "",
             birthDate: odfModalTarget.dateOfBirth || "",
-            clinician: odfModalTarget.clinician || DEFAULT_CLINICIAN,
+            clinician: odfModalTarget.clinician || UNASSIGNED_CLINICIAN,
           }}
           currentUser={currentUser}
           onCancel={() => setOdfModalTarget(null)}
@@ -1007,7 +1019,7 @@ function AppRoutes() {
                     <strong style={{ color: "#475569" }}>Visit Date:</strong> {activeReviewModal.visitDate}
                   </p>
                   <p style={{ margin: "3px 0" }}>
-                    <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeReviewModal.clinician || DEFAULT_CLINICIAN}
+                    <strong style={{ color: "#475569" }}>Attending Clinician:</strong> {activeReviewModal.clinician || UNASSIGNED_CLINICIAN}
                   </p>
                   <p style={{ margin: "3px 0" }}>
                     <strong style={{ color: "#475569" }}>Proposed Procedure:</strong> {activeReviewModal.procedure}

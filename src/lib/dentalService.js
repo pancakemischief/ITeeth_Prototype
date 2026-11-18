@@ -44,7 +44,26 @@ function sanitizeSupabaseError(error, fallback = "Unable to sync with cloud data
   return raw;
 }
 
-export const DEFAULT_CLINICIAN = "Dr. Jane Doe, MD";
+export const UNASSIGNED_CLINICIAN = "Unassigned Clinician";
+export const DEFAULT_CLINICIAN = UNASSIGNED_CLINICIAN;
+
+export function getTodayManilaIso() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+export function getTodayManilaDisplay() {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  }).format(new Date());
+}
 
 const PHI_STORAGE_PREFIX = "iteeth_";
 
@@ -156,7 +175,7 @@ export const DEFAULT_PATIENTS = [
     eightDigitId: "10000001",
     name: "John Doe",
     lastVisit: "01/01/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: UNASSIGNED_CLINICIAN,
     procedure: "Biannual Prophylaxis & Bitewing X-Rays",
     phone: "0917-555-0101",
     email: "patient.johndoe@gmail.com",
@@ -189,7 +208,7 @@ export const DEFAULT_PATIENTS = [
     eightDigitId: "10000002",
     name: "Sarah Connor",
     lastVisit: "02/14/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: UNASSIGNED_CLINICIAN,
     procedure: "Endodontic Therapy #14",
     phone: "0918-555-0102",
     email: "sarah.connor@gmail.com",
@@ -222,7 +241,7 @@ export const DEFAULT_PATIENTS = [
     eightDigitId: "10000003",
     name: "Marcus Wright",
     lastVisit: "03/10/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: UNASSIGNED_CLINICIAN,
     procedure: "Composite Restoration #30 MOD",
     phone: "0919-555-0103",
     email: "marcus.wright@gmail.com",
@@ -255,7 +274,7 @@ export const DEFAULT_PATIENTS = [
     eightDigitId: "10000004",
     name: "Kyle Reese",
     lastVisit: "03/18/2026",
-    clinician: DEFAULT_CLINICIAN,
+    clinician: UNASSIGNED_CLINICIAN,
     procedure: "Gingival Scaling & Root Planing",
     phone: "0920-555-0104",
     email: "kyle.reese@gmail.com",
@@ -443,12 +462,13 @@ function normalizePatient(row, index = 1) {
     "Unknown Patient";
 
   const formattedDate = row.created_at
-    ? new Date(row.created_at).toLocaleDateString("en-US", {
+    ? new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Manila",
         month: "2-digit",
         day: "2-digit",
         year: "numeric",
-      })
-    : "01/01/2026";
+      }).format(new Date(row.created_at))
+    : getTodayManilaDisplay();
 
   const eightDigitId = to8DigitId(row.eight_digit_id || meta.eightDigitId || row.id, index);
 
@@ -466,7 +486,7 @@ function normalizePatient(row, index = 1) {
     age: meta.age || "",
     homeAddress: meta.homeAddress || "",
     lastVisit: meta.lastVisit || row.last_visit || formattedDate,
-    clinician: meta.clinician || row.clinician || DEFAULT_CLINICIAN,
+    clinician: meta.clinician || row.clinician || UNASSIGNED_CLINICIAN,
     procedure: meta.procedure || row.procedure || "Dental Examination & Charting",
     notes: meta.notes || (typeof row.medical_history === "string" ? row.medical_history : ""),
     odfData: meta.odfData || null,
@@ -488,8 +508,8 @@ function normalizePending(row, index = 1) {
     submissionId: String(row.id),
     eightDigitId,
     name: row.name || "Unknown Patient",
-    visitDate: row.visit_date || "01/01/2026",
-    clinician: row.clinician || DEFAULT_CLINICIAN,
+    visitDate: row.visit_date || getTodayManilaDisplay(),
+    clinician: row.clinician || UNASSIGNED_CLINICIAN,
     submittedBy: row.submitted_by || odfDetails.submittedBy || null,
     clinicianEmail: row.clinician_email || odfDetails.submittedBy || null,
     procedure: row.procedure || "Oral Diagnosis Form (ODF)",
@@ -586,14 +606,8 @@ export async function savePatientToSupabase(patient) {
 
   const meta = {
     eightDigitId: numericId,
-    clinician: patient.clinician || DEFAULT_CLINICIAN,
-    lastVisit:
-      patient.lastVisit ||
-      new Date().toLocaleDateString("en-US", {
-        month: "2-digit",
-        day: "2-digit",
-        year: "numeric",
-      }),
+    clinician: patient.clinician || UNASSIGNED_CLINICIAN,
+    lastVisit: patient.lastVisit || getTodayManilaDisplay(),
     procedure: patient.procedure || "Dental Examination & Charting",
     notes: patient.notes || "",
     phone: patient.phone || "",
@@ -827,15 +841,9 @@ export async function savePendingToSupabase(item) {
     eightDigitId: numericId,
   };
 
-  const visitDate =
-    item.visitDate ||
-    new Date().toLocaleDateString("en-US", {
-      month: "2-digit",
-      day: "2-digit",
-      year: "numeric",
-    });
+  const visitDate = item.visitDate || getTodayManilaDisplay();
 
-  const clinician = item.clinician || DEFAULT_CLINICIAN;
+  const clinician = item.clinician || UNASSIGNED_CLINICIAN;
   const submittedBy = item.submittedBy || odfDetails.submittedBy || null;
   const procedure = item.procedure || "Oral Diagnosis Form (ODF)";
   const notes = item.notes || item.historyOfPresentIllness || "";
@@ -937,8 +945,8 @@ export async function approvePendingInSupabase(item) {
       id: `rec_${numericId}_${Date.now()}`,
       patientId: numericId,
       title: item.procedure || "Approved Oral Diagnosis Form (ODF)",
-      date: item.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-      clinician: item.clinician || DEFAULT_CLINICIAN,
+      date: item.visitDate || getTodayManilaDisplay(),
+      clinician: item.clinician || UNASSIGNED_CLINICIAN,
       type: "odf",
       typeLabel: "Approved ODF",
       status: "Faculty Approved",
@@ -1025,140 +1033,7 @@ export async function fetchPatientHistoryRecords(patient) {
   if (!patient) return [];
   const numericId = to8DigitId(patient.id || patient.eightDigitId);
 
-  // Baseline records tailored to patient ID
-  const baselineMap = {
-    "10000001": [
-      {
-        id: "rec_1001_1",
-        date: "10/01/2026",
-        dateFormatted: { month: "OCT", day: "01", year: "2026" },
-        title: "Oral Diagnosis Form (ODF) Examination",
-        type: "odf",
-        typeLabel: "ODF Form",
-        status: "Verified & Approved",
-        toothNo: "#19",
-        clinician: DEFAULT_CLINICIAN,
-        summary: "Comprehensive clinical charting, bitewing analysis, and Class II restorative evaluation.",
-        notes: "Tooth #19 exhibits occlusal-distal carious lesion. Pulp vitality test within normal limits.",
-        hasOdontogram: true,
-        odfDetails: {
-          eightDigitId: "10000001",
-          name: "John Doe",
-          age: "31",
-          sex: "Male",
-          chiefComplaints: ["Tooth sensitivity on lower left molar during cold drinks", "Routine 6-month checkup"],
-          historyOfPresentIllness: "Patient noted mild discomfort when drinking cold fluids for approximately two weeks.",
-          bloodPressure: "120/80",
-          pulseRate: "72 bpm",
-          respiratoryRate: "16 cpm",
-          temperature: "36.5 °C",
-          tentativeDiagnosis: ["Class II Occlusal-Distal Dental Caries Tooth #19"],
-          recommendedTreatmentPlan: ["Direct posterior composite restoration #19", "Biannual prophylaxis & topical fluoride"],
-        },
-      },
-      {
-        id: "rec_1001_2",
-        date: "06/14/2026",
-        dateFormatted: { month: "JUN", day: "14", year: "2026" },
-        title: "Composite Restoration Tooth #30 MOD",
-        type: "treatment",
-        typeLabel: "Treatment Record",
-        status: "Completed",
-        toothNo: "#30",
-        clinician: DEFAULT_CLINICIAN,
-        diagnosis: "Class II MOD Dental Caries",
-        summary: "Cavity preparation under local infiltration anesthesia. Etched, bonded, and cured with nanohybrid composite.",
-        notes: "Articulating paper verification confirmed harmonious centric contact. Patient instructed on post-op care.",
-      },
-      {
-        id: "rec_1001_3",
-        date: "01/01/2026",
-        dateFormatted: { month: "JAN", day: "01", year: "2026" },
-        title: "Biannual Prophylaxis & Bitewing Radiographs",
-        type: "treatment",
-        typeLabel: "Prophylaxis",
-        status: "Completed",
-        clinician: DEFAULT_CLINICIAN,
-        diagnosis: "Mild plaque-induced gingivitis",
-        summary: "Ultrasonic scaling and polishing with fine fluoride paste. Radiographs reveal bone levels intact.",
-        notes: "Demonstrated modified Bass brushing technique and daily interdental flossing.",
-      },
-      {
-        id: "rec_1001_4",
-        date: "08/15/2025",
-        dateFormatted: { month: "AUG", day: "15", year: "2025" },
-        title: "Initial Comprehensive Dental Consultation",
-        type: "appointment",
-        typeLabel: "Consultation",
-        status: "Completed",
-        clinician: DEFAULT_CLINICIAN,
-        summary: "Establishment of patient dental record, medical questionnaire completion, and soft tissue examination.",
-        notes: "No systemic contraindications to elective dental care noted.",
-      },
-    ],
-    "10000002": [
-      {
-        id: "rec_1002_1",
-        date: "02/14/2026",
-        dateFormatted: { month: "FEB", day: "14", year: "2026" },
-        title: "Endodontic Therapy #14 (Root Canal)",
-        type: "treatment",
-        typeLabel: "Treatment Record",
-        status: "Completed",
-        toothNo: "#14",
-        clinician: DEFAULT_CLINICIAN,
-        diagnosis: "Symptomatic Irreversible Pulpitis #14",
-        summary: "Biomechanically prepared MB, DB, and palatal canals. Obturated with gutta-percha and AH Plus sealer.",
-        notes: "Post-endodontic core buildup completed. Scheduled for full ceramic crown fabrication.",
-      },
-      {
-        id: "rec_1002_2",
-        date: "11/20/2025",
-        dateFormatted: { month: "NOV", day: "20", year: "2025" },
-        title: "Oral Diagnosis Form (ODF) — Pulp Vitality Assessment",
-        type: "odf",
-        typeLabel: "ODF Form",
-        status: "Verified & Approved",
-        toothNo: "#14",
-        clinician: DEFAULT_CLINICIAN,
-        summary: "Diagnostic cold test elicited lingering pain on tooth #14. Periapical radiograph indicates widening of PDL.",
-        notes: "Recommended root canal treatment followed by cusp-coverage restoration.",
-      },
-    ],
-    "10000003": [
-      {
-        id: "rec_1003_1",
-        date: "03/10/2026",
-        dateFormatted: { month: "MAR", day: "10", year: "2026" },
-        title: "Composite Restoration #30 MOD",
-        type: "treatment",
-        typeLabel: "Treatment Record",
-        status: "Completed",
-        toothNo: "#30",
-        clinician: DEFAULT_CLINICIAN,
-        diagnosis: "Moderate dentin caries",
-        summary: "Composite placed in 2mm increments. Finishing completed with composite polishing discs.",
-        notes: "Centric and eccentric occlusal contacts checked and cleared.",
-      },
-    ],
-    "10000004": [
-      {
-        id: "rec_1004_1",
-        date: "03/18/2026",
-        dateFormatted: { month: "MAR", day: "18", year: "2026" },
-        title: "Gingival Scaling & Root Planing (Quad 1 & 2)",
-        type: "treatment",
-        typeLabel: "Periodontics",
-        status: "Completed",
-        clinician: DEFAULT_CLINICIAN,
-        diagnosis: "Localized Stage II Periodontitis",
-        summary: "Subgingival debridement performed with Gracey curettes 1/2 and 11/12 under topical lidocaine.",
-        notes: "Follow-up periodontal probing scheduled in 4 weeks.",
-      },
-    ],
-  };
-
-  const recordsList = [...(baselineMap[numericId] || [])];
+  const recordsList = [];
 
   // Also include any locally saved records for this patient (most recent first)
   const localRecs = getLocalRecords().filter((r) => r.patientId === numericId);
@@ -1181,13 +1056,13 @@ export async function fetchPatientHistoryRecords(patient) {
     if (!alreadySavedAsApproved) {
       recordsList.unshift({
         id: lp.submissionId || `pending_${numericId}_${lp.visitDate || ""}`,
-        date: lp.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+        date: lp.visitDate || getTodayManilaDisplay(),
         dateFormatted: formatDateParts(lp.visitDate),
         title: lp.procedure || "Oral Diagnosis Form (ODF) Submission",
         type: "odf",
         typeLabel: "Pending ODF",
         status: "Pending Sign-off",
-        clinician: lp.clinician || DEFAULT_CLINICIAN,
+        clinician: lp.clinician || UNASSIGNED_CLINICIAN,
         summary: lp.notes || details.historyOfPresentIllness || "ODF Clinical Consultation",
         notes: lp.notes || details.historyOfPresentIllness || "",
         hasOdontogram: !!(details.odontogramCropUrl || lp.odontogramCropUrl),
@@ -1203,7 +1078,7 @@ export async function fetchPatientHistoryRecords(patient) {
   // Include current patient.odfData if no local/baseline ODF already captures it
   if (patient.odfData && (patient.odfData.chiefComplaints?.some(Boolean) || patient.odfData.tentativeDiagnosis?.some(Boolean) || patient.odfData.rawScanUrl)) {
     const odf = patient.odfData;
-    const visitDate = patient.lastVisit || odf.date || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+    const visitDate = patient.lastVisit || odf.date || getTodayManilaDisplay();
     const hasMatchingOdf = recordsList.some(
       (r) => r.type === "odf" && (r.date === visitDate || r.odfDetails === odf)
     );
@@ -1216,7 +1091,7 @@ export async function fetchPatientHistoryRecords(patient) {
         type: "odf",
         typeLabel: "ODF Form",
         status: "Clinical Record",
-        clinician: patient.clinician || DEFAULT_CLINICIAN,
+        clinician: patient.clinician || UNASSIGNED_CLINICIAN,
         summary: patient.procedure || "Clinical oral diagnosis and examination",
         notes: patient.notes || odf.historyOfPresentIllness || "",
         hasOdontogram: !!(odf.odontogramCropUrl || patient.odfData?.odontogramCropUrl),
@@ -1241,16 +1116,26 @@ export async function fetchPatientHistoryRecords(patient) {
 
       if (Array.isArray(treatments)) {
         treatments.forEach((t) => {
+          const treatmentDate =
+            t.treatment_date ||
+            (t.created_at
+              ? new Intl.DateTimeFormat("en-US", {
+                  timeZone: "Asia/Manila",
+                  month: "2-digit",
+                  day: "2-digit",
+                  year: "numeric",
+                }).format(new Date(t.created_at))
+              : getTodayManilaDisplay());
           recordsList.unshift({
             id: `tr_${t.id}`,
-            date: t.treatment_date || new Date(t.created_at).toLocaleDateString("en-US"),
+            date: treatmentDate,
             dateFormatted: formatDateParts(t.treatment_date || t.created_at),
             title: t.procedure_name || "Dental Treatment",
             type: "treatment",
             typeLabel: "Treatment Record",
             status: "Recorded in DB",
             toothNo: t.tooth_number ? `Tooth #${t.tooth_number}` : null,
-            clinician: patient.clinician || DEFAULT_CLINICIAN,
+            clinician: patient.clinician || UNASSIGNED_CLINICIAN,
             diagnosis: t.diagnosis || "",
             summary: t.notes || t.procedure_name,
             notes: t.notes,
@@ -1270,13 +1155,13 @@ export async function fetchPatientHistoryRecords(patient) {
         const details = appr.odf_details || {};
         recordsList.unshift({
           id: `appr_${appr.id}_${appr.created_at || Date.now()}`,
-          date: appr.visit_date || "01/01/2026",
+          date: appr.visit_date || getTodayManilaDisplay(),
           dateFormatted: formatDateParts(appr.visit_date),
           title: appr.procedure || "Oral Diagnosis Form (ODF)",
           type: "odf",
           typeLabel: appr.status === "approved" ? "Approved ODF" : "Pending ODF",
           status: appr.status === "approved" ? "Faculty Approved" : "Pending Sign-off",
-          clinician: appr.clinician || DEFAULT_CLINICIAN,
+          clinician: appr.clinician || UNASSIGNED_CLINICIAN,
           summary: appr.notes || details.historyOfPresentIllness || "ODF Clinical Consultation",
           notes: appr.notes,
           hasOdontogram: !!(details.odontogramCropUrl || appr.odontogram_crop_url),
@@ -1304,22 +1189,6 @@ export async function fetchPatientHistoryRecords(patient) {
         dateFormatted: r.dateFormatted || formatDateParts(r.date),
       });
     }
-  }
-
-  // If list is empty for a newly added patient (and hasn't been explicitly deleted), supply a baseline initial exam record
-  if (deduped.length === 0 && !deletedRecordSet.has(`init_${numericId}`)) {
-    deduped.push({
-      id: `init_${numericId}`,
-      date: patient.lastVisit || new Date().toLocaleDateString("en-US"),
-      dateFormatted: formatDateParts(patient.lastVisit),
-      title: patient.procedure || "Initial Clinical Consultation & Oral Examination",
-      type: "treatment",
-      typeLabel: "Clinical Entry",
-      status: "Verified",
-      clinician: patient.clinician || DEFAULT_CLINICIAN,
-      summary: patient.notes || "Patient clinical chart opened and documented in CEU Dental System.",
-      notes: patient.notes,
-    });
   }
 
   return deduped;
@@ -1486,22 +1355,42 @@ export async function deleteEntirePatient(patient) {
 }
 
 function formatDateParts(dateStr) {
-  if (!dateStr) return { month: "DATE", day: "01", year: "2026" };
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) {
-    const parts = String(dateStr).split(/[/.-]/);
-    if (parts.length >= 3) {
-      const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
-      const mIdx = Math.max(0, Math.min(11, parseInt(parts[0], 10) - 1));
-      return { month: monthNames[mIdx] || "DATE", day: parts[1], year: parts[2] };
-    }
-    return { month: "DATE", day: String(dateStr), year: "" };
+  if (!dateStr) return { month: "DATE", day: "—", year: "" };
+  const monthNames = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const str = String(dateStr).trim();
+
+  const isoDateMatch = str.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoDateMatch) {
+    const year = isoDateMatch[1];
+    const mIdx = Math.max(0, Math.min(11, parseInt(isoDateMatch[2], 10) - 1));
+    const day = isoDateMatch[3].padStart(2, "0");
+    return { month: monthNames[mIdx] || "DATE", day, year };
   }
-  return {
-    month: d.toLocaleString("en-US", { month: "short" }).toUpperCase(),
-    day: d.toLocaleString("en-US", { day: "2-digit" }),
-    year: d.getFullYear(),
-  };
+
+  const slashMatch = str.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+  if (slashMatch) {
+    const mIdx = Math.max(0, Math.min(11, parseInt(slashMatch[1], 10) - 1));
+    const day = slashMatch[2].padStart(2, "0");
+    const year = slashMatch[3].length === 2 ? `20${slashMatch[3]}` : slashMatch[3];
+    return { month: monthNames[mIdx] || "DATE", day, year };
+  }
+
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) {
+    const manilaIso = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Manila",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(d);
+    const parts = manilaIso.split("-");
+    if (parts.length === 3) {
+      const mIdx = Math.max(0, Math.min(11, parseInt(parts[1], 10) - 1));
+      return { month: monthNames[mIdx] || "DATE", day: parts[2], year: parts[0] };
+    }
+  }
+
+  return { month: "DATE", day: str, year: "" };
 }
 
 /**
