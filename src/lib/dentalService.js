@@ -55,6 +55,47 @@ export const DECLINE_RUBRIC_DOMAINS = [
   { id: "clinicalDocumentation", label: "Clinical Notes & Signatures" },
 ];
 
+export const OCR_CONFIDENCE_LOW = 0.70;
+export const OCR_CONFIDENCE_WARN = 0.85;
+
+export function summarizeOcrConfidence(odfDetails = {}) {
+  const scores =
+    odfDetails?.ocrConfidence && typeof odfDetails.ocrConfidence === "object"
+      ? odfDetails.ocrConfidence
+      : {};
+  const verifiedMap =
+    odfDetails?.ocrVerifiedFields && typeof odfDetails.ocrVerifiedFields === "object"
+      ? odfDetails.ocrVerifiedFields
+      : {};
+
+  const flaggedFields = [];
+  const unverifiedFields = [];
+
+  for (const [fieldKey, rawScore] of Object.entries(scores)) {
+    const score = Number(rawScore);
+    if (Number.isNaN(score) || score >= OCR_CONFIDENCE_WARN) continue;
+    const entry = {
+      field: fieldKey,
+      score,
+      severity: score < OCR_CONFIDENCE_LOW ? "low" : "warn",
+      verified: Boolean(verifiedMap[fieldKey]),
+    };
+    flaggedFields.push(entry);
+    if (!entry.verified) {
+      unverifiedFields.push(entry);
+    }
+  }
+
+  return {
+    engine: odfDetails?.ocrEngine || null,
+    totalScored: Object.keys(scores).length,
+    flaggedFields,
+    unverifiedFields,
+    flaggedCount: flaggedFields.length,
+    unverifiedCount: unverifiedFields.length,
+  };
+}
+
 /**
  * Computes a deterministic lowercase hex SHA-256 digest over canonicalized clinical/consent ODF fields.
  */
@@ -837,8 +878,8 @@ export async function fetchClinicalRequirementsData(userEmail = null, isFacultyO
     }
 
     const sortedCredits = (Array.isArray(credRes.data) ? [...credRes.data] : []).sort((a, b) => {
-      const da = new Date(a.credited_at || a.visit_date || a.created_at || 0).getTime();
-      const db = new Date(b.credited_at || b.visit_date || b.created_at || 0).getTime();
+      const da = new Date(a.approved_at || a.credited_at || a.visit_date || a.created_at || 0).getTime();
+      const db = new Date(b.approved_at || b.credited_at || b.visit_date || b.created_at || 0).getTime();
       return (Number.isNaN(db) ? 0 : db) - (Number.isNaN(da) ? 0 : da);
     });
 
@@ -1159,6 +1200,8 @@ export async function savePendingToSupabase(item) {
     ];
     saveLocalPending(updatedPending);
 
+    const ocrSummary = summarizeOcrConfidence(odfDetails);
+
     await logClinicalAuditEvent(
       "ODF_SUBMITTED",
       numericId,
@@ -1168,6 +1211,11 @@ export async function savePendingToSupabase(item) {
         name: savedPending.name,
         procedure: savedPending.procedure,
         visitDate: savedPending.visitDate,
+        ocrTelemetry: {
+          engine: ocrSummary.engine,
+          flaggedCount: ocrSummary.flaggedCount,
+          unverifiedCount: ocrSummary.unverifiedCount,
+        },
       }
     );
 

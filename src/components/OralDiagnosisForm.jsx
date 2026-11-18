@@ -12,6 +12,9 @@ import {
   getTodayManilaDisplay,
   computeCanonicalRecordHash,
   DECLINE_RUBRIC_DOMAINS,
+  OCR_CONFIDENCE_LOW,
+  OCR_CONFIDENCE_WARN,
+  summarizeOcrConfidence,
 } from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
@@ -36,6 +39,205 @@ function formatSignatureTimestamp(ts) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(d);
+}
+
+const OCR_FIELD_LABELS = {
+  name: "Patient Name",
+  birthDate: "Birthdate",
+  age: "Age",
+  sex: "Sex",
+  homeAddress: "Home Address",
+  cellPhone: "Cell Phone No.",
+  bloodPressure: "Blood Pressure",
+  pulseRate: "Pulse Rate",
+  allergySpecify: "Allergy (Specify)",
+  chiefComplaints: "Chief Complaints",
+  historyOfPresentIllness: "History of Present Illness",
+  tentativeDiagnosis: "Tentative Diagnosis",
+  recommendedTreatmentPlan: "Recommended Treatment Plan",
+  teethFindings: "Odontogram Findings",
+};
+
+const OCR_KEY_ALIASES = {
+  name: ["PatientName", "Name", "FullName"],
+  birthDate: ["BirthDate", "Birthdate", "DateOfBirth", "DOB"],
+  age: ["Age"],
+  sex: ["Sex", "Gender"],
+  homeAddress: ["HomeAddress", "Address"],
+  cellPhone: ["CellPhone", "CellphoneNo", "CellNo", "Mobile", "MobileNo"],
+  bloodPressure: ["BloodPressure", "BP"],
+  pulseRate: ["PulseRate", "Pulse", "PR"],
+  allergySpecify: ["AllergySpecify", "Allergy", "Allergies"],
+  chiefComplaints: [
+    "ChiefComplaint",
+    "ChiefComplaints",
+    "ChiefComplaint1",
+    "ChiefComplaint2",
+    "ChiefComplaint3",
+    "ChiefComplaint4",
+    "Complaint1",
+    "Complaint2",
+    "Complaint3",
+    "Complaint4",
+  ],
+  historyOfPresentIllness: [
+    "HistoryOfPresentIllness",
+    "PresentIllness",
+    "BHistoryOfPresentIllness",
+  ],
+  tentativeDiagnosis: [
+    "TentativeDiagnosis1",
+    "TentativeDiagnosis2",
+    "TentativeDiagnosis3",
+    "TentativeDiagnosis4",
+    "TentativeDiagnosis5",
+    "TentativeDiagnosis6",
+    "Diagnosis1",
+    "Diagnosis2",
+    "Diagnosis3",
+    "Diagnosis4",
+  ],
+  recommendedTreatmentPlan: [
+    "RecommendedTreatmentPlan1",
+    "RecommendedTreatmentPlan2",
+    "RecommendedTreatmentPlan3",
+    "RecommendedTreatmentPlan4",
+    "RecommendedTreatmentPlan5",
+    "RecommendedTreatmentPlan6",
+    "TreatmentPlan1",
+    "TreatmentPlan2",
+    "Plan1",
+    "Plan2",
+  ],
+  teethFindings: ["Odontogram", "MouthExamination", "TeethFindings"],
+};
+
+function normalizeOcrKeyToken(str) {
+  return String(str || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeConfidenceScore(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const num = Number(raw);
+  if (Number.isNaN(num)) return null;
+  const normalized = num > 1 && num <= 100 ? num / 100 : num;
+  return Math.round(Math.max(0.05, Math.min(0.99, normalized)) * 100) / 100;
+}
+
+function findBackendConfidenceForField(ocrResult, fieldKey) {
+  const aliases = (OCR_KEY_ALIASES[fieldKey] || [fieldKey]).map(normalizeOcrKeyToken);
+  const scores = [];
+
+  const fieldsMap = ocrResult?.fields;
+  if (fieldsMap && typeof fieldsMap === "object") {
+    for (const [k, fieldObj] of Object.entries(fieldsMap)) {
+      const normK = normalizeOcrKeyToken(k);
+      if (aliases.includes(normK)) {
+        const s = normalizeConfidenceScore(fieldObj?.confidence);
+        if (s !== null) scores.push(s);
+      }
+    }
+  }
+
+  const kvList = Array.isArray(ocrResult?.keyValuePairs) ? ocrResult.keyValuePairs : [];
+  for (const kv of kvList) {
+    const normKv = normalizeOcrKeyToken(kv?.key);
+    if (!normKv) continue;
+    if (aliases.some((cand) => normKv === cand || normKv.endsWith(cand) || normKv.startsWith(cand))) {
+      const s = normalizeConfidenceScore(kv?.confidence);
+      if (s !== null) scores.push(s);
+    }
+  }
+
+  if (scores.length === 0) return null;
+  return Math.min(...scores);
+}
+
+function computeHeuristicConfidence(fieldKey, extractedVal, engine) {
+  const rawText = Array.isArray(extractedVal)
+    ? extractedVal.map((v) => String(v || "").trim()).filter(Boolean).join(" ")
+    : typeof extractedVal === "object" && extractedVal !== null
+    ? Object.values(extractedVal).map((v) => String(v || "").trim()).filter(Boolean).join(" ")
+    : String(extractedVal || "").trim();
+
+  if (!rawText) return null;
+
+  if (fieldKey === "sex" && /^(male|female)$/i.test(rawText)) {
+    return engine === "azure-idp" ? 0.91 : 0.86;
+  }
+
+  let score = engine === "paddleocr" ? 0.80 : 0.83;
+
+  // Ambiguous OCR artifacts / unrecognizable symbols
+  if (/[~^|\\_{}<>?]/.test(rawText)) {
+    score -= 0.16;
+  }
+
+  // Numeric/vital/date ambiguity checks
+  if (fieldKey === "birthDate") {
+    if (!/^\d{1,2}[/-]\d{1,2}[/-]\d{2,4}$/.test(rawText) && !/^\d{4}-\d{2}-\d{2}$/.test(rawText)) {
+      score -= 0.15;
+    }
+  } else if (fieldKey === "age") {
+    const num = Number(rawText);
+    if (!/^\d{1,3}$/.test(rawText) || Number.isNaN(num) || num < 1 || num > 115) {
+      score -= 0.18;
+    }
+  } else if (fieldKey === "bloodPressure") {
+    if (!/^\d{2,3}\/\d{2,3}$/.test(rawText.replace(/\s+/g, ""))) {
+      score -= 0.16;
+    }
+  } else if (fieldKey === "pulseRate") {
+    const cleaned = rawText.replace(/\s*bpm$/i, "").trim();
+    if (!/^\d{2,3}$/.test(cleaned)) {
+      score -= 0.14;
+    }
+  } else if (fieldKey === "cellPhone") {
+    const digits = rawText.replace(/\D/g, "");
+    if (digits.length < 7 || /[OIlS]/.test(rawText.replace(/[+\-()\s]/g, ""))) {
+      score -= 0.15;
+    }
+  } else if (rawText.length <= 2) {
+    score -= 0.14;
+  }
+
+  // High noise / punctuation density check
+  const nonAlphaNum = (rawText.match(/[^a-zA-Z0-9\s.,/-]/g) || []).length;
+  if (rawText.length > 0 && nonAlphaNum / rawText.length > 0.25) {
+    score -= 0.10;
+  }
+
+  return Math.round(Math.max(0.42, Math.min(0.95, score)) * 100) / 100;
+}
+
+function extractOcrConfidenceMap(ocrResult, extractedUpdates, engine) {
+  const confidenceMap = {};
+  const targetFields = Object.keys(OCR_FIELD_LABELS);
+
+  for (const fieldKey of targetFields) {
+    if (!(fieldKey in extractedUpdates)) continue;
+    const val = extractedUpdates[fieldKey];
+    const hasValue = Array.isArray(val)
+      ? val.some((item) => String(item || "").trim().length > 0)
+      : typeof val === "object" && val !== null
+      ? Object.keys(val).length > 0
+      : String(val || "").trim().length > 0;
+    if (!hasValue) continue;
+
+    const backendScore = findBackendConfidenceForField(ocrResult, fieldKey);
+    if (backendScore !== null) {
+      confidenceMap[fieldKey] = backendScore;
+    } else {
+      const heuristic = computeHeuristicConfidence(fieldKey, val, engine);
+      if (heuristic !== null) {
+        confidenceMap[fieldKey] = heuristic;
+      }
+    }
+  }
+
+  return confidenceMap;
 }
 
 // 3-Row x 4-Column Medical Conditions matching CEU Makati ODF Page 1
@@ -282,6 +484,17 @@ export default function OralDiagnosisForm({
           ? `${currentUser.name} (${currentUser.role})`
           : currentUser?.email || ""),
       approvalSignature: initialData?.approvalSignature || null,
+
+      // OCR Confidence & Clinician Verification Telemetry
+      ocrConfidence:
+        initialData?.ocrConfidence && typeof initialData.ocrConfidence === "object"
+          ? { ...initialData.ocrConfidence }
+          : {},
+      ocrEngine: initialData?.ocrEngine || null,
+      ocrVerifiedFields:
+        initialData?.ocrVerifiedFields && typeof initialData.ocrVerifiedFields === "object"
+          ? { ...initialData.ocrVerifiedFields }
+          : {},
     };
   });
 
@@ -385,17 +598,132 @@ export default function OralDiagnosisForm({
     return isPreboundPatient ? currentId : defaultNewId;
   };
 
+  const getFieldOcrMeta = (fieldKey) => {
+    const raw = form.ocrConfidence?.[fieldKey];
+    if (raw === undefined || raw === null || raw === "") return null;
+    const score = Number(raw);
+    if (Number.isNaN(score)) return null;
+    const severity =
+      score < OCR_CONFIDENCE_LOW
+        ? "low"
+        : score < OCR_CONFIDENCE_WARN
+        ? "warn"
+        : "high";
+    const isVerified = Boolean(form.ocrVerifiedFields?.[fieldKey]);
+    return { score, severity, isVerified };
+  };
+
+  const markFieldOcrVerified = (fieldKey) => {
+    if (readOnly) return;
+    setForm((prev) => ({
+      ...prev,
+      ocrVerifiedFields: {
+        ...(prev.ocrVerifiedFields || {}),
+        [fieldKey]: true,
+      },
+    }));
+  };
+
+  const getOcrInputStyle = (fieldKey, baseStyle = {}) => {
+    const meta = getFieldOcrMeta(fieldKey);
+    if (!meta || meta.score >= OCR_CONFIDENCE_WARN || meta.isVerified) {
+      return baseStyle;
+    }
+    const tint = meta.severity === "low" ? "#dc2626" : "#f59e0b";
+    const bg = meta.severity === "low" ? "#fef2f2" : "#fffbeb";
+    return {
+      ...baseStyle,
+      borderColor: tint,
+      backgroundColor: bg,
+    };
+  };
+
+  const renderOcrBadge = (fieldKey) => {
+    const meta = getFieldOcrMeta(fieldKey);
+    if (!meta || meta.score >= OCR_CONFIDENCE_WARN) return null;
+    const pct = Math.round(meta.score * 100);
+    if (meta.isVerified) {
+      return (
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "4px",
+            fontSize: "10.5px",
+            fontWeight: 700,
+            fontVariantNumeric: "tabular-nums",
+            padding: "1px 7px",
+            borderRadius: "999px",
+            background: "#ecfdf5",
+            color: "#047857",
+            border: "1px solid #a7f3d0",
+            whiteSpace: "nowrap",
+          }}
+        >
+          ✓ Verified ({pct}%)
+        </span>
+      );
+    }
+    const isLow = meta.severity === "low";
+    return (
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "5px",
+          fontSize: "10.5px",
+          fontWeight: 700,
+          fontVariantNumeric: "tabular-nums",
+          padding: "1px 7px",
+          borderRadius: "999px",
+          background: isLow ? "#fef2f2" : "#fffbeb",
+          color: isLow ? "#b91c1c" : "#b45309",
+          border: `1px solid ${isLow ? "#fecaca" : "#fcd34d"}`,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span>{isLow ? `Low OCR • ${pct}%` : `Verify OCR • ${pct}%`}</span>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={() => markFieldOcrVerified(fieldKey)}
+            style={{
+              border: "none",
+              background: isLow ? "#dc2626" : "#d97706",
+              color: "#ffffff",
+              borderRadius: "999px",
+              padding: "1px 6px",
+              fontSize: "10px",
+              fontWeight: 800,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              lineHeight: 1.3,
+            }}
+          >
+            Verify
+          </button>
+        )}
+      </span>
+    );
+  };
+
   const updateField = (field, value) => {
     if (readOnly) return;
-    if (field === "name") {
-      setForm((prev) => ({
-        ...prev,
-        name: value,
-        eightDigitId: resolvePatientIdForName(value, prev.eightDigitId),
-      }));
-      return;
-    }
-    setForm((prev) => ({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const hasOcrScore = prev.ocrConfidence?.[field] !== undefined;
+      const nextVerified = hasOcrScore
+        ? { ...(prev.ocrVerifiedFields || {}), [field]: true }
+        : prev.ocrVerifiedFields;
+      if (field === "name") {
+        return {
+          ...prev,
+          name: value,
+          eightDigitId: resolvePatientIdForName(value, prev.eightDigitId),
+          ocrVerifiedFields: nextVerified,
+        };
+      }
+      return { ...prev, [field]: value, ocrVerifiedFields: nextVerified };
+    });
   };
 
   const updateTreatmentLogRow = (rowIndex, field, value) => {
@@ -439,7 +767,11 @@ export default function OralDiagnosisForm({
     setForm((prev) => {
       const updated = [...prev.chiefComplaints];
       updated[index] = value;
-      return { ...prev, chiefComplaints: updated };
+      const nextVerified =
+        prev.ocrConfidence?.chiefComplaints !== undefined
+          ? { ...(prev.ocrVerifiedFields || {}), chiefComplaints: true }
+          : prev.ocrVerifiedFields;
+      return { ...prev, chiefComplaints: updated, ocrVerifiedFields: nextVerified };
     });
   };
 
@@ -448,7 +780,11 @@ export default function OralDiagnosisForm({
     setForm((prev) => {
       const updated = [...prev.tentativeDiagnosis];
       updated[index] = value;
-      return { ...prev, tentativeDiagnosis: updated };
+      const nextVerified =
+        prev.ocrConfidence?.tentativeDiagnosis !== undefined
+          ? { ...(prev.ocrVerifiedFields || {}), tentativeDiagnosis: true }
+          : prev.ocrVerifiedFields;
+      return { ...prev, tentativeDiagnosis: updated, ocrVerifiedFields: nextVerified };
     });
   };
 
@@ -457,7 +793,30 @@ export default function OralDiagnosisForm({
     setForm((prev) => {
       const updated = [...prev.recommendedTreatmentPlan];
       updated[index] = value;
-      return { ...prev, recommendedTreatmentPlan: updated };
+      const nextVerified =
+        prev.ocrConfidence?.recommendedTreatmentPlan !== undefined
+          ? { ...(prev.ocrVerifiedFields || {}), recommendedTreatmentPlan: true }
+          : prev.ocrVerifiedFields;
+      return {
+        ...prev,
+        recommendedTreatmentPlan: updated,
+        ocrVerifiedFields: nextVerified,
+      };
+    });
+  };
+
+  const updateToothFinding = (toothKey, value) => {
+    if (readOnly) return;
+    setForm((prev) => {
+      const nextVerified =
+        prev.ocrConfidence?.teethFindings !== undefined
+          ? { ...(prev.ocrVerifiedFields || {}), teethFindings: true }
+          : prev.ocrVerifiedFields;
+      return {
+        ...prev,
+        teethFindings: { ...(prev.teethFindings || {}), [toothKey]: value },
+        ocrVerifiedFields: nextVerified,
+      };
     });
   };
 
@@ -598,13 +957,21 @@ export default function OralDiagnosisForm({
             // If user uploaded a multi-page PDF containing both Page 1 & Page 2, map Page 2 as well
             const p2Updates =
               (azureRes.pages?.length || 0) >= 2 ? parseAzurePage2ToForm(azureRes, prev) : {};
+            const mergedUpdates = { ...p1Updates, ...p2Updates };
+            const extractedScores = extractOcrConfidenceMap(azureRes, mergedUpdates, "azure-idp");
+            const nextVerified = { ...(prev.ocrVerifiedFields || {}) };
+            Object.keys(extractedScores).forEach((k) => {
+              delete nextVerified[k];
+            });
             const nextName = p1Updates.name || prev.name;
             const resolvedId = resolvePatientIdForName(nextName, prev.eightDigitId);
             return {
               ...prev,
-              ...p1Updates,
-              ...p2Updates,
+              ...mergedUpdates,
               eightDigitId: resolvedId,
+              ocrEngine: "azure-idp",
+              ocrConfidence: { ...(prev.ocrConfidence || {}), ...extractedScores },
+              ocrVerifiedFields: nextVerified,
             };
           });
         }
@@ -626,12 +993,20 @@ export default function OralDiagnosisForm({
 
           setForm((prev) => {
             const p1Updates = parseAzurePage1ToForm(paddleRes, prev);
+            const extractedScores = extractOcrConfidenceMap(paddleRes, p1Updates, "paddleocr");
+            const nextVerified = { ...(prev.ocrVerifiedFields || {}) };
+            Object.keys(extractedScores).forEach((k) => {
+              delete nextVerified[k];
+            });
             const nextName = p1Updates.name || prev.name;
             const resolvedId = resolvePatientIdForName(nextName, prev.eightDigitId);
             return {
               ...prev,
               ...p1Updates,
               eightDigitId: resolvedId,
+              ocrEngine: "paddleocr",
+              ocrConfidence: { ...(prev.ocrConfidence || {}), ...extractedScores },
+              ocrVerifiedFields: nextVerified,
             };
           });
         } catch (ocrErr) {
@@ -709,10 +1084,21 @@ export default function OralDiagnosisForm({
 
         if (azureRes?.configured) {
           usedAzure = true;
-          setForm((prev) => ({
-            ...prev,
-            ...parseAzurePage2ToForm(azureRes, prev),
-          }));
+          setForm((prev) => {
+            const p2Updates = parseAzurePage2ToForm(azureRes, prev);
+            const extractedScores = extractOcrConfidenceMap(azureRes, p2Updates, "azure-idp");
+            const nextVerified = { ...(prev.ocrVerifiedFields || {}) };
+            Object.keys(extractedScores).forEach((k) => {
+              delete nextVerified[k];
+            });
+            return {
+              ...prev,
+              ...p2Updates,
+              ocrEngine: "azure-idp",
+              ocrConfidence: { ...(prev.ocrConfidence || {}), ...extractedScores },
+              ocrVerifiedFields: nextVerified,
+            };
+          });
         }
       } catch (azureErr) {
         console.warn("Azure Document Intelligence Page 2 warning (falling back to local OCR):", azureErr);
@@ -729,10 +1115,21 @@ export default function OralDiagnosisForm({
               : `page2_${form.eightDigitId}.jpg`;
           const paddleRes = await analyzeOdfWithPaddle(blob, 2, fileName);
           usedPaddle = true;
-          setForm((prev) => ({
-            ...prev,
-            ...parseAzurePage2ToForm(paddleRes, prev),
-          }));
+          setForm((prev) => {
+            const p2Updates = parseAzurePage2ToForm(paddleRes, prev);
+            const extractedScores = extractOcrConfidenceMap(paddleRes, p2Updates, "paddleocr");
+            const nextVerified = { ...(prev.ocrVerifiedFields || {}) };
+            Object.keys(extractedScores).forEach((k) => {
+              delete nextVerified[k];
+            });
+            return {
+              ...prev,
+              ...p2Updates,
+              ocrEngine: "paddleocr",
+              ocrConfidence: { ...(prev.ocrConfidence || {}), ...extractedScores },
+              ocrVerifiedFields: nextVerified,
+            };
+          });
         } catch (ocrErr) {
           console.warn("PaddleOCR Page 2 fallback warning:", ocrErr);
         }
@@ -976,6 +1373,135 @@ export default function OralDiagnosisForm({
           <div style={{ maxWidth: "900px", margin: "0 auto 12px" }}>
             <MedicalAlertBanner odfData={form} />
 
+            {(() => {
+              const ocrSummary = summarizeOcrConfidence(form);
+              if (ocrSummary.totalScored === 0) return null;
+              const engineLabel =
+                form.ocrEngine === "azure-idp"
+                  ? "MS Azure IDP"
+                  : form.ocrEngine === "paddleocr"
+                  ? "PaddleOCR Fallback"
+                  : "OCR Extraction";
+              const hasLowUnverified = ocrSummary.unverifiedFields.some(
+                (f) => f.severity === "low"
+              );
+              const bannerBg =
+                ocrSummary.unverifiedCount === 0
+                  ? "#ecfdf5"
+                  : hasLowUnverified
+                  ? "#fef2f2"
+                  : "#fffbeb";
+              const bannerBorder =
+                ocrSummary.unverifiedCount === 0
+                  ? "#10b981"
+                  : hasLowUnverified
+                  ? "#dc2626"
+                  : "#f59e0b";
+              const bannerText =
+                ocrSummary.unverifiedCount === 0
+                  ? "#065f46"
+                  : hasLowUnverified
+                  ? "#991b1b"
+                  : "#92400e";
+
+              return (
+                <div
+                  role="region"
+                  aria-label="OCR Extraction Confidence"
+                  style={{
+                    background: bannerBg,
+                    border: `1.5px solid ${bannerBorder}`,
+                    borderRadius: "10px",
+                    padding: "11px 15px",
+                    marginTop: "10px",
+                    color: bannerText,
+                    fontSize: "12.5px",
+                    lineHeight: "1.5",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      gap: "8px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <span
+                        style={{
+                          background: "#0f172a",
+                          color: "#ffffff",
+                          fontSize: "11px",
+                          fontWeight: 800,
+                          padding: "2px 8px",
+                          borderRadius: "999px",
+                        }}
+                      >
+                        {engineLabel}
+                      </span>
+                      <strong style={{ fontSize: "13px" }}>
+                        OCR Extraction Confidence
+                      </strong>
+                      <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                        {ocrSummary.totalScored} scored · {ocrSummary.flaggedCount} flagged (&lt;85%) ·{" "}
+                        {ocrSummary.unverifiedCount} unverified
+                      </span>
+                    </div>
+
+                    {readOnly && ocrSummary.unverifiedCount > 0 && onViewUploadedScans && (
+                      <button
+                        type="button"
+                        onClick={onViewUploadedScans}
+                        style={{
+                          background: "#ffffff",
+                          border: `1px solid ${bannerBorder}`,
+                          color: bannerText,
+                          borderRadius: "8px",
+                          padding: "5px 11px",
+                          fontSize: "12px",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                        }}
+                      >
+                        Compare with Uploaded Scan
+                      </button>
+                    )}
+                  </div>
+
+                  {ocrSummary.unverifiedCount > 0 && (
+                    <div style={{ marginTop: "8px", display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
+                      <span style={{ fontWeight: 700, fontSize: "11.5px" }}>
+                        {readOnly ? "Unverified OCR fields:" : "Verify or edit highlighted fields:"}
+                      </span>
+                      {ocrSummary.unverifiedFields.map((item) => {
+                        const isLow = item.severity === "low";
+                        return (
+                          <span
+                            key={item.field}
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: 700,
+                              fontVariantNumeric: "tabular-nums",
+                              padding: "2px 8px",
+                              borderRadius: "999px",
+                              background: "#ffffff",
+                              color: isLow ? "#b91c1c" : "#b45309",
+                              border: `1px solid ${isLow ? "#fca5a5" : "#fcd34d"}`,
+                            }}
+                          >
+                            {OCR_FIELD_LABELS[item.field] || item.field} ({Math.round(item.score * 100)}%)
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
             {activeRevisionFeedback && (() => {
               const rubricMap = activeRevisionFeedback.rubric || {};
               const flaggedDomains = DECLINE_RUBRIC_DOMAINS.filter(
@@ -1173,60 +1699,70 @@ export default function OralDiagnosisForm({
                   )}
                   {/* Row 1: Name, Home Address (No Date field) */}
                   <div className="ceu-form-row ceu-form-row--row1">
-                    <div className="ceu-field ceu-field--name">
+                    <div className="ceu-field ceu-field--name" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Name:</span>
                       <input
                         type="text"
                         className="ceu-line-input ceu-line-input--bold"
+                        style={getOcrInputStyle("name")}
                         value={form.name}
                         onChange={(e) => updateField("name", e.target.value)}
                         placeholder="Last Name, First Name Middle Initial"
                         required
                       />
+                      {renderOcrBadge("name")}
                     </div>
-                    <div className="ceu-field ceu-field--home-address">
+                    <div className="ceu-field ceu-field--home-address" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Home Address:</span>
                       <input
                         type="text"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("homeAddress")}
                         value={form.homeAddress}
                         onChange={(e) => updateField("homeAddress", e.target.value)}
                         placeholder="House No., Street, Barangay, City"
                       />
+                      {renderOcrBadge("homeAddress")}
                     </div>
                   </div>
 
                   {/* Row 2: Birthdate, Age, Sex, Ht, Wt, Civil Status */}
                   <div className="ceu-form-row ceu-form-row--row2">
-                    <div className="ceu-field ceu-field--birthdate">
+                    <div className="ceu-field ceu-field--birthdate" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Birthdate:</span>
                       <input
                         type="text"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("birthDate")}
                         value={form.birthDate}
                         onChange={(e) => updateField("birthDate", e.target.value)}
                         placeholder="MM/DD/YYYY"
                       />
+                      {renderOcrBadge("birthDate")}
                     </div>
-                    <div className="ceu-field ceu-field--age">
+                    <div className="ceu-field ceu-field--age" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Age:</span>
                       <input
                         type="number"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("age")}
                         value={form.age}
                         onChange={(e) => updateField("age", e.target.value)}
                         placeholder="Yrs"
                       />
+                      {renderOcrBadge("age")}
                     </div>
-                    <div className="ceu-field ceu-field--sex">
+                    <div className="ceu-field ceu-field--sex" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Sex:</span>
                       <input
                         type="text"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("sex")}
                         value={form.sex}
                         onChange={(e) => updateField("sex", e.target.value)}
                         placeholder="M / F"
                       />
+                      {renderOcrBadge("sex")}
                     </div>
                     <div className="ceu-field ceu-field--ht">
                       <span className="ceu-label">Ht:</span>
@@ -1271,15 +1807,17 @@ export default function OralDiagnosisForm({
                         placeholder="Landline"
                       />
                     </div>
-                    <div className="ceu-field ceu-field--cell-phone">
+                    <div className="ceu-field ceu-field--cell-phone" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Cell Phone No.:</span>
                       <input
                         type="tel"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("cellPhone")}
                         value={form.cellPhone}
                         onChange={(e) => updateField("cellPhone", e.target.value)}
                         placeholder="09XX-XXX-XXXX"
                       />
+                      {renderOcrBadge("cellPhone")}
                     </div>
                     <div className="ceu-field ceu-field--nationality">
                       <span className="ceu-label">Nationality:</span>
@@ -1318,8 +1856,9 @@ export default function OralDiagnosisForm({
                     <h4>I. CASE HISTORY</h4>
                   </div>
 
-                  <div className="ceu-subheading">
+                  <div className="ceu-subheading" style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                     <strong>A. Chief Complaint/s:</strong>
+                    {renderOcrBadge("chiefComplaints")}
                   </div>
                   <div className="ceu-ruled-lines-group">
                     {form.chiefComplaints.map((complaint, idx) => (
@@ -1328,6 +1867,7 @@ export default function OralDiagnosisForm({
                         <input
                           type="text"
                           className="ceu-ruled-input"
+                          style={getOcrInputStyle("chiefComplaints")}
                           value={complaint}
                           onChange={(e) => updateComplaint(idx, e.target.value)}
                           placeholder={idx === 0 ? "e.g. Tooth sensitivity on lower molar during cold food intake" : ""}
@@ -1336,8 +1876,11 @@ export default function OralDiagnosisForm({
                     ))}
                   </div>
 
-                  <div className="ceu-subheading ceu-subheading--with-action">
-                    <strong>B. History of Present Illness:</strong>
+                  <div className="ceu-subheading ceu-subheading--with-action" style={{ gap: "8px", flexWrap: "wrap" }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <strong>B. History of Present Illness:</strong>
+                      {renderOcrBadge("historyOfPresentIllness")}
+                    </div>
                     {!readOnly && (
                       <button
                         type="button"
@@ -1363,6 +1906,7 @@ export default function OralDiagnosisForm({
                   <textarea
                     rows={3}
                     className="ceu-ruled-textarea"
+                    style={getOcrInputStyle("historyOfPresentIllness")}
                     value={form.historyOfPresentIllness}
                     onChange={(e) => updateField("historyOfPresentIllness", e.target.value)}
                     placeholder={readOnly ? "" : "Describe onset, duration, character, and exacerbating factors..."}
@@ -1434,7 +1978,7 @@ export default function OralDiagnosisForm({
 
                     {/* Final row at bottom: [ ] Allergy, specify: | Other Illnesses: | Medications currently taking */}
                     <div className="ceu-past-history-bottom-row">
-                      <div className="ceu-bottom-col ceu-bottom-col--allergy">
+                      <div className="ceu-bottom-col ceu-bottom-col--allergy" style={{ flexWrap: "wrap" }}>
                         <div
                           className="ceu-med-check-box"
                           onClick={toggleAllergyCheck}
@@ -1457,6 +2001,7 @@ export default function OralDiagnosisForm({
                         <input
                           type="text"
                           className="ceu-line-input ceu-line-input--bottom"
+                          style={getOcrInputStyle("allergySpecify")}
                           value={form.allergySpecify}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -1464,10 +2009,15 @@ export default function OralDiagnosisForm({
                               ...prev,
                               allergySpecify: val,
                               allergyCheck: val.trim() ? "present" : prev.allergyCheck,
+                              ocrVerifiedFields:
+                                prev.ocrConfidence?.allergySpecify !== undefined
+                                  ? { ...(prev.ocrVerifiedFields || {}), allergySpecify: true }
+                                  : prev.ocrVerifiedFields,
                             }));
                           }}
                           placeholder="e.g. Penicillin, Food"
                         />
+                        {renderOcrBadge("allergySpecify")}
                       </div>
 
                       <div className="ceu-bottom-col ceu-bottom-col--other">
@@ -1737,25 +2287,29 @@ export default function OralDiagnosisForm({
 
                   {/* Vital Signs Row */}
                   <div className="ceu-vitals-strip">
-                    <div className="ceu-field ceu-field--vital">
+                    <div className="ceu-field ceu-field--vital" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">BP:</span>
                       <input
                         type="text"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("bloodPressure")}
                         value={form.bloodPressure}
                         onChange={(e) => updateField("bloodPressure", e.target.value)}
                         placeholder=""
                       />
+                      {renderOcrBadge("bloodPressure")}
                     </div>
-                    <div className="ceu-field ceu-field--vital">
+                    <div className="ceu-field ceu-field--vital" style={{ flexWrap: "wrap" }}>
                       <span className="ceu-label">Pulse Rate:</span>
                       <input
                         type="text"
                         className="ceu-line-input"
+                        style={getOcrInputStyle("pulseRate")}
                         value={form.pulseRate}
                         onChange={(e) => updateField("pulseRate", e.target.value)}
                         placeholder=""
                       />
+                      {renderOcrBadge("pulseRate")}
                     </div>
                     <div className="ceu-field ceu-field--vital">
                       <span className="ceu-label">Resp. Rate:</span>
@@ -1943,8 +2497,11 @@ export default function OralDiagnosisForm({
 
                 {/* SECTION C: MOUTH EXAMINATION (ODONTOGRAM BLOCK) */}
                 <section className="ceu-section ceu-section--odontogram">
-                  <div className="ceu-section-header ceu-section-header--between">
-                    <h4>C. MOUTH EXAMINATION (ODONTOGRAM)</h4>
+                  <div className="ceu-section-header ceu-section-header--between" style={{ gap: "8px", flexWrap: "wrap" }}>
+                    <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                      <h4>C. MOUTH EXAMINATION (ODONTOGRAM)</h4>
+                      {renderOcrBadge("teethFindings")}
+                    </div>
                     <div className="ceu-view-switch">
                       {form.odontogramCropUrl && (
                         <button
@@ -2049,15 +2606,9 @@ export default function OralDiagnosisForm({
                               <span className="ceu-tooth-num">{t}</span>
                               <input
                                 className="ceu-tooth-stat-input"
+                                style={getOcrInputStyle("teethFindings")}
                                 value={form.teethFindings[t] || ""}
-                                onChange={(e) => {
-                                  if (readOnly) return;
-                                  const val = e.target.value;
-                                  setForm((prev) => ({
-                                    ...prev,
-                                    teethFindings: { ...prev.teethFindings, [t]: val },
-                                  }));
-                                }}
+                                onChange={(e) => updateToothFinding(t, e.target.value)}
                                 placeholder="—"
                               />
                             </div>
@@ -2069,14 +2620,9 @@ export default function OralDiagnosisForm({
                               <span className="ceu-tooth-num">{t}</span>
                               <input
                                 className="ceu-tooth-stat-input"
+                                style={getOcrInputStyle("teethFindings")}
                                 value={form.teethFindings[t] || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setForm((prev) => ({
-                                    ...prev,
-                                    teethFindings: { ...prev.teethFindings, [t]: val },
-                                  }));
-                                }}
+                                onChange={(e) => updateToothFinding(t, e.target.value)}
                                 placeholder="—"
                               />
                             </div>
@@ -2092,14 +2638,9 @@ export default function OralDiagnosisForm({
                               <span className="ceu-tooth-num">{t}</span>
                               <input
                                 className="ceu-tooth-stat-input"
+                                style={getOcrInputStyle("teethFindings")}
                                 value={form.teethFindings[t] || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setForm((prev) => ({
-                                    ...prev,
-                                    teethFindings: { ...prev.teethFindings, [t]: val },
-                                  }));
-                                }}
+                                onChange={(e) => updateToothFinding(t, e.target.value)}
                                 placeholder="✓"
                               />
                             </div>
@@ -2111,14 +2652,9 @@ export default function OralDiagnosisForm({
                               <span className="ceu-tooth-num">{t}</span>
                               <input
                                 className="ceu-tooth-stat-input"
+                                style={getOcrInputStyle("teethFindings")}
                                 value={form.teethFindings[t] || ""}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setForm((prev) => ({
-                                    ...prev,
-                                    teethFindings: { ...prev.teethFindings, [t]: val },
-                                  }));
-                                }}
+                                onChange={(e) => updateToothFinding(t, e.target.value)}
                                 placeholder="✓"
                               />
                             </div>
@@ -2305,8 +2841,9 @@ export default function OralDiagnosisForm({
                 <section className="ceu-section">
                   <div className="ceu-diagnosis-plan-grid">
                     <div className="ceu-col-plan">
-                      <div className="ceu-subheading">
+                      <div className="ceu-subheading" style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                         <strong>Tentative Diagnosis:</strong>
+                        {renderOcrBadge("tentativeDiagnosis")}
                       </div>
                       <div className="ceu-ruled-lines-group">
                         {form.tentativeDiagnosis.map((item, idx) => (
@@ -2315,6 +2852,7 @@ export default function OralDiagnosisForm({
                             <input
                               type="text"
                               className="ceu-ruled-input"
+                              style={getOcrInputStyle("tentativeDiagnosis")}
                               value={item}
                               onChange={(e) => updateDiagnosis(idx, e.target.value)}
                               placeholder=""
@@ -2325,8 +2863,9 @@ export default function OralDiagnosisForm({
                     </div>
 
                     <div className="ceu-col-plan">
-                      <div className="ceu-subheading">
+                      <div className="ceu-subheading" style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
                         <strong>Recommended Treatment Plan:</strong>
+                        {renderOcrBadge("recommendedTreatmentPlan")}
                       </div>
                       <div className="ceu-ruled-lines-group">
                         {form.recommendedTreatmentPlan.map((item, idx) => (
@@ -2335,6 +2874,7 @@ export default function OralDiagnosisForm({
                             <input
                               type="text"
                               className="ceu-ruled-input"
+                              style={getOcrInputStyle("recommendedTreatmentPlan")}
                               value={item}
                               onChange={(e) => updateTreatmentPlan(idx, e.target.value)}
                               placeholder=""

@@ -7,6 +7,7 @@ import {
   UNASSIGNED_CLINICIAN,
   generateNextPatientId,
   DECLINE_RUBRIC_DOMAINS,
+  summarizeOcrConfidence,
 } from "../lib/dentalService";
 
 const ROWS = 11;
@@ -428,10 +429,57 @@ export default function PendingApproval({
                 {filtered.map((p) => {
                   const formatted8DigitId = to8DigitId(p.id);
                   const rowKey = p.submissionId || `${formatted8DigitId}-${p.visitDate || ""}`;
+                  const ocrSummary = summarizeOcrConfidence(p.odfDetails);
+                  const hasLowSeverity = ocrSummary.unverifiedFields.some(
+                    (f) => f.severity === "low"
+                  );
                   return (
                     <tr key={rowKey}>
                       <td className="table__id-cell">{formatted8DigitId}</td>
-                      <td style={{ fontWeight: 600 }}>{p.name}</td>
+                      <td style={{ fontWeight: 600 }}>
+                        <div>{p.name}</div>
+                        {ocrSummary.unverifiedCount > 0 ? (
+                          <div style={{ marginTop: "4px" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                fontVariantNumeric: "tabular-nums",
+                                padding: "2px 8px",
+                                borderRadius: "999px",
+                                background: hasLowSeverity ? "#fef2f2" : "#fffbeb",
+                                color: hasLowSeverity ? "#b91c1c" : "#b45309",
+                                border: `1px solid ${hasLowSeverity ? "#fecaca" : "#fcd34d"}`,
+                              }}
+                            >
+                              ⚠ {ocrSummary.unverifiedCount} Unverified OCR Field
+                              {ocrSummary.unverifiedCount > 1 ? "s" : ""}
+                            </span>
+                          </div>
+                        ) : ocrSummary.flaggedCount > 0 ? (
+                          <div style={{ marginTop: "4px" }}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                fontSize: "11px",
+                                fontWeight: 700,
+                                padding: "2px 8px",
+                                borderRadius: "999px",
+                                background: "#ecfdf5",
+                                color: "#047857",
+                                border: "1px solid #a7f3d0",
+                              }}
+                            >
+                              ✓ OCR Fields Verified
+                            </span>
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="table__date-cell">{p.visitDate}</td>
                       <td>{p.clinician || UNASSIGNED_CLINICIAN}</td>
                       <td className="table__actions-cell">
