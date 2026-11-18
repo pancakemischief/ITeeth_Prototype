@@ -10,6 +10,7 @@ import {
   getLocalPending,
   getTodayManilaIso,
   getTodayManilaDisplay,
+  computeCanonicalRecordHash,
 } from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
@@ -19,7 +20,22 @@ import {
 } from "../lib/azureOdfParser";
 import { useWhisperDictation } from "../lib/whisperClient";
 import { isStudentClinician } from "../lib/roleUtils";
+import MedicalAlertBanner from "./MedicalBannerAlert";
 import "./OralDiagnosisForm.css";
+
+function formatSignatureTimestamp(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
+}
 
 // 3-Row x 4-Column Medical Conditions matching CEU Makati ODF Page 1
 const MEDICAL_CONDITIONS_COLS = [
@@ -255,8 +271,36 @@ export default function OralDiagnosisForm({
         (currentUser?.name
           ? `${currentUser.name} (${currentUser.role})`
           : currentUser?.email || ""),
+      approvalSignature: initialData?.approvalSignature || null,
     };
   });
+
+  const [signatureCheck, setSignatureCheck] = useState({
+    expectedHash: "",
+    status: null, // "verified" | "tampered"
+  });
+
+  const expectedSignatureHash = form.approvalSignature?.recordHash || "";
+
+  useEffect(() => {
+    if (!form.approvalSignature) return;
+    let active = true;
+
+    computeCanonicalRecordHash(form).then((computedHash) => {
+      if (!active) return;
+      const isMatch = Boolean(expectedSignatureHash && computedHash === expectedSignatureHash);
+      setSignatureCheck({
+        expectedHash: expectedSignatureHash,
+        status: isMatch ? "verified" : "tampered",
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [form, expectedSignatureHash]);
+
+  const signatureStatus = form.approvalSignature ? signatureCheck.status : null;
 
   const hasAnyScan = Boolean(
     form.rawScanUrl ||
@@ -917,6 +961,102 @@ export default function OralDiagnosisForm({
 
         {/* Form Body - Authentic Paper Replica of Centro Escolar University Oral Diagnosis Form */}
         <div className="ceu-odf-scroll-container">
+          <div style={{ maxWidth: "900px", margin: "0 auto 12px" }}>
+            <MedicalAlertBanner odfData={form} />
+
+            {form.approvalSignature && (
+              signatureStatus === "tampered" ? (
+                <div
+                  role="alert"
+                  style={{
+                    background: "linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)",
+                    border: "2px solid #b91c1c",
+                    borderRadius: "10px",
+                    padding: "10px 14px",
+                    color: "#7f1d1d",
+                    fontSize: "12.5px",
+                    fontWeight: "700",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    boxShadow: "0 4px 10px rgba(185, 28, 28, 0.16)",
+                  }}
+                >
+                  <span>⚠️ TAMPER-EVIDENCE ALERT: Record contents no longer match the faculty-signed SHA-256 digest!</span>
+                </div>
+              ) : signatureStatus === "verified" ? (
+                <div
+                  role="status"
+                  style={{
+                    background: "linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)",
+                    border: "1.5px solid #10b981",
+                    borderRadius: "10px",
+                    padding: "10px 14px",
+                    color: "#065f46",
+                    fontSize: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: "8px",
+                    boxShadow: "0 2px 8px rgba(16, 185, 129, 0.12)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                    <span
+                      style={{
+                        background: "#059669",
+                        color: "#ffffff",
+                        fontWeight: "800",
+                        fontSize: "11px",
+                        padding: "3px 8px",
+                        borderRadius: "6px",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "4px",
+                      }}
+                    >
+                      🛡️ VERIFIED FACULTY E-SIGNATURE
+                    </span>
+                    <span>
+                      Digitally Signed by{" "}
+                      <strong>{form.approvalSignature.signedBy || "Supervising Faculty"}</strong>
+                      {(form.approvalSignature.employeeId || form.approvalSignature.employee_id) && (
+                        <> (ID: {form.approvalSignature.employeeId || form.approvalSignature.employee_id})</>
+                      )}
+                    </span>
+                    {(form.approvalSignature.signedAt || form.approvalSignature.timestamp) && (
+                      <span style={{ color: "#047857" }}>
+                        • {formatSignatureTimestamp(form.approvalSignature.signedAt || form.approvalSignature.timestamp)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontFamily: "monospace", fontSize: "11px", color: "#047857", fontWeight: "700" }}>
+                    Ledger #{form.approvalSignature.ledgerSeq ?? "—"} • SHA-256:{" "}
+                    {form.approvalSignature.ledgerEntryHash
+                      ? `${String(form.approvalSignature.ledgerEntryHash).slice(0, 16)}...`
+                      : "N/A"}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  role="status"
+                  style={{
+                    background: "#f1f5f9",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "10px",
+                    padding: "8px 14px",
+                    color: "#475569",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                  }}
+                >
+                  🛡️ Verifying faculty e-signature SHA-256 integrity...
+                </div>
+              )
+            )}
+          </div>
+
           <form onSubmit={handleSaveForm} className={`ceu-odf-paper-form ${readOnly ? "ceu-odf-paper-form--readonly" : ""}`}>
 
             {/* ================= PAGE 1 ================= */}

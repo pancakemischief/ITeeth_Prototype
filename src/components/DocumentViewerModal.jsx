@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { generateCeuOdfPage1Svg, generateCeuOdfPage2Svg, svgToDataUri } from "../lib/ceuFormRenderer";
 import { uploadOdfImageToStorage, resolveOdfScanSignedUrl, to8DigitId } from "../lib/dentalService";
+import MedicalAlertBanner from "./MedicalBannerAlert";
 
 export default function DocumentViewerModal({
   record,
@@ -505,6 +506,11 @@ export default function DocumentViewerModal({
               </span>
             )}
           </div>
+        </div>
+
+        {/* Medical Alert Banner */}
+        <div style={{ padding: "10px 22px 0", background: "#f8fafc" }}>
+          <MedicalAlertBanner odfData={odfDetails} patient={patient} record={record} />
         </div>
 
         {/* Document Display Canvas */}

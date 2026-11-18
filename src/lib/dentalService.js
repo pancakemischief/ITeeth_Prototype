@@ -47,6 +47,156 @@ function sanitizeSupabaseError(error, fallback = "Unable to sync with cloud data
 export const UNASSIGNED_CLINICIAN = "Unassigned Clinician";
 export const DEFAULT_CLINICIAN = UNASSIGNED_CLINICIAN;
 
+/**
+ * Computes a deterministic lowercase hex SHA-256 digest over canonicalized clinical/consent ODF fields.
+ */
+export async function computeCanonicalRecordHash(rawOdf = {}) {
+  const src = rawOdf && typeof rawOdf === "object" ? rawOdf : {};
+
+  const sortedPastHistory = {};
+  if (src.pastHistory && typeof src.pastHistory === "object") {
+    for (const key of Object.keys(src.pastHistory).sort()) {
+      const val = src.pastHistory[key];
+      if (val === "present" || val === "none") {
+        sortedPastHistory[key] = val;
+      }
+    }
+  }
+
+  const sortedTeethFindings = {};
+  if (src.teethFindings && typeof src.teethFindings === "object") {
+    for (const key of Object.keys(src.teethFindings).sort()) {
+      const val = String(src.teethFindings[key] ?? "").trim();
+      if (val) {
+        sortedTeethFindings[key] = val;
+      }
+    }
+  }
+
+  const canonical = {
+    allergyCheck: src.allergyCheck === true ? "present" : String(src.allergyCheck || "").trim(),
+    allergySpecify: String(src.allergySpecify || "").trim(),
+    birthDate: String(src.birthDate || "").trim(),
+    bloodPressure: String(src.bloodPressure || "").trim(),
+    chiefComplaints: Array.isArray(src.chiefComplaints)
+      ? src.chiefComplaints.map((c) => String(c || "").trim()).filter(Boolean)
+      : [],
+    consentClinicianName: String(src.consentClinicianName || "").trim(),
+    consentCropUrl: src.consentCropUrl ? String(src.consentCropUrl).trim() : null,
+    consentPatientName: String(src.consentPatientName || "").trim(),
+    eightDigitId: to8DigitId(src.eightDigitId),
+    examinedBy: String(src.examinedBy || "").trim(),
+    historyOfPresentIllness: String(src.historyOfPresentIllness || "").trim(),
+    name: String(src.name || "").trim(),
+    odontogramCropUrl: src.odontogramCropUrl ? String(src.odontogramCropUrl).trim() : null,
+    pastHistory: sortedPastHistory,
+    rawScanPage2Url: src.rawScanPage2Url ? String(src.rawScanPage2Url).trim() : null,
+    rawScanUrl: src.rawScanUrl ? String(src.rawScanUrl).trim() : null,
+    recommendedTreatmentPlan: Array.isArray(src.recommendedTreatmentPlan)
+      ? src.recommendedTreatmentPlan.map((t) => String(t || "").trim()).filter(Boolean)
+      : [],
+    sex: String(src.sex || "").trim(),
+    teethFindings: sortedTeethFindings,
+    tentativeDiagnosis: Array.isArray(src.tentativeDiagnosis)
+      ? src.tentativeDiagnosis.map((d) => String(d || "").trim()).filter(Boolean)
+      : [],
+  };
+
+  if (typeof crypto === "undefined" || !crypto.subtle) {
+    return "";
+  }
+
+  const encoded = new TextEncoder().encode(JSON.stringify(canonical));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Logs an immutable clinical audit event via Supabase RPC `log_clinical_audit_event`.
+ */
+export async function logClinicalAuditEvent(
+  actionType,
+  eightDigitId,
+  targetId,
+  recordHash,
+  recordSnapshot = {}
+) {
+  try {
+    const { data, error } = await supabase.rpc("log_clinical_audit_event", {
+      p_action_type: actionType,
+      p_eight_digit_id: to8DigitId(eightDigitId),
+      p_target_id: String(targetId || ""),
+      p_record_hash: recordHash || "",
+      p_record_snapshot: recordSnapshot,
+    });
+    if (error) {
+      console.warn("[Supabase Audit] log_clinical_audit_event error:", error.message);
+      return { success: false, error: sanitizeSupabaseError(error, "Audit log skipped.") };
+    }
+    return { success: true, data };
+  } catch (err) {
+    console.warn("[Supabase Audit] Unexpected error logging audit event:", err);
+    return { success: false, error: sanitizeSupabaseError(err, "Audit log skipped.") };
+  }
+}
+
+/**
+ * Fetches recent entries from `clinical_audit_ledger` ordered newest-first.
+ */
+export async function fetchClinicalAuditLedger(limit = 50) {
+  try {
+    const { data, error } = await supabase
+      .from("clinical_audit_ledger")
+      .select("*")
+      .order("seq_num", { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      console.warn("[Supabase Audit] fetchClinicalAuditLedger error:", error.message);
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Unable to fetch audit ledger."),
+        data: [],
+      };
+    }
+    return { success: true, error: null, data: Array.isArray(data) ? data : [] };
+  } catch (err) {
+    console.warn("[Supabase Audit] Unexpected error fetching audit ledger:", err);
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Unable to fetch audit ledger."),
+      data: [],
+    };
+  }
+}
+
+/**
+ * Verifies the cryptographic integrity of `clinical_audit_ledger` via RPC `verify_clinical_audit_chain`.
+ */
+export async function verifyClinicalAuditChain() {
+  try {
+    const { data, error } = await supabase.rpc("verify_clinical_audit_chain");
+    if (error) {
+      console.warn("[Supabase Audit] verifyClinicalAuditChain error:", error.message);
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Unable to verify audit chain."),
+        data: null,
+      };
+    }
+    return { success: true, error: null, data };
+  } catch (err) {
+    console.warn("[Supabase Audit] Unexpected error verifying audit chain:", err);
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Unable to verify audit chain."),
+      data: null,
+    };
+  }
+}
+
 export function getTodayManilaIso() {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Manila",
@@ -490,6 +640,7 @@ function normalizePatient(row, index = 1) {
     procedure: meta.procedure || row.procedure || "Dental Examination & Charting",
     notes: meta.notes || (typeof row.medical_history === "string" ? row.medical_history : ""),
     odfData: meta.odfData || null,
+    approvalSignature: meta.approvalSignature || meta.odfData?.approvalSignature || null,
   };
 }
 
@@ -833,12 +984,17 @@ export async function resolveOdfScanSignedUrl(pathOrUrl, expiresInSeconds = 300)
 export async function savePendingToSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
 
-  // Preserve image crops inside odf_details
-  const odfDetails = {
+  // Preserve image crops inside odf_details and compute canonical SHA-256 record hash
+  const baseOdfDetails = {
     ...(item.odfDetails || item),
     odontogramCropUrl: item.odontogramCropUrl || item.odfDetails?.odontogramCropUrl || null,
     consentCropUrl: item.consentCropUrl || item.odfDetails?.consentCropUrl || null,
     eightDigitId: numericId,
+  };
+  const recordHash = await computeCanonicalRecordHash(baseOdfDetails);
+  const odfDetails = {
+    ...baseOdfDetails,
+    submittedRecordHash: recordHash,
   };
 
   const visitDate = item.visitDate || getTodayManilaDisplay();
@@ -890,6 +1046,18 @@ export async function savePendingToSupabase(item) {
     ];
     saveLocalPending(updatedPending);
 
+    await logClinicalAuditEvent(
+      "ODF_SUBMITTED",
+      numericId,
+      savedPending.submissionId,
+      recordHash,
+      {
+        name: savedPending.name,
+        procedure: savedPending.procedure,
+        visitDate: savedPending.visitDate,
+      }
+    );
+
     return {
       success: true,
       error: null,
@@ -911,9 +1079,14 @@ export async function approvePendingInSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
 
   try {
+    const recordHash =
+      item.odfDetails?.submittedRecordHash ||
+      (await computeCanonicalRecordHash(item.odfDetails || item));
+
     const { data, error } = await supabase.rpc("approve_pending_submission", {
       p_submission_id: item.dbId ? String(item.dbId) : "",
       p_eight_digit_id: numericId,
+      p_record_hash: recordHash,
     });
 
     const patientRow = Array.isArray(data) ? data[0] : data;
@@ -927,6 +1100,11 @@ export async function approvePendingInSupabase(item) {
     }
 
     const normalizedPatient = normalizePatient(patientRow);
+    const approvalSignature =
+      normalizedPatient.approvalSignature ||
+      normalizedPatient.odfData?.approvalSignature ||
+      item.odfDetails?.approvalSignature ||
+      null;
 
     // 1. Update local pending cache
     const targetDbId = item.dbId ? String(item.dbId) : null;
@@ -953,7 +1131,15 @@ export async function approvePendingInSupabase(item) {
       notes: item.notes || "Approved faculty procedure and ODF documentation.",
       rawScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
       rawScanPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
-      odfDetails: item.odfDetails || null,
+      approvalSignature,
+      odfDetails: item.odfDetails
+        ? {
+            ...item.odfDetails,
+            ...(approvalSignature ? { approvalSignature } : {}),
+          }
+        : approvalSignature
+        ? { approvalSignature }
+        : null,
       odontogramCropUrl: item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl || null,
       consentCropUrl: item.odfDetails?.consentCropUrl || item.consentCropUrl || null,
       hasOdontogram: !!(item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl),
@@ -1013,6 +1199,14 @@ export async function declinePendingInSupabase(item) {
         if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
         return to8DigitId(p.id) !== numericId;
       })
+    );
+
+    await logClinicalAuditEvent(
+      "FACULTY_DECLINED",
+      numericId,
+      item.dbId || item.submissionId || numericId,
+      item.odfDetails?.submittedRecordHash || "",
+      { name: item.name, procedure: item.procedure }
     );
 
     return { success: true };
@@ -1272,6 +1466,14 @@ export async function deleteSelectedPatientRecords(patient, recordsToDelete = []
   });
   saveLocalPending(nextLocalPending);
 
+  await logClinicalAuditEvent(
+    "RECORD_DELETED",
+    numericId,
+    targetIds.join(","),
+    "",
+    { deletedCount: targetIds.length }
+  );
+
   return { success: true, deletedIds: targetIds };
 }
 
@@ -1350,6 +1552,14 @@ export async function deleteEntirePatient(patient) {
 
   const nextPending = getLocalPending().filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId);
   saveLocalPending(nextPending);
+
+  await logClinicalAuditEvent(
+    "PATIENT_DELETED",
+    numericId,
+    numericId,
+    "",
+    { name: patient.name }
+  );
 
   return { success: true, patientId: numericId };
 }

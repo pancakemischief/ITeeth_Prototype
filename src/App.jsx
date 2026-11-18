@@ -7,6 +7,7 @@ import Settings from "./components/Settings";
 import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
 import OralDiagnosisForm from "./components/OralDiagnosisForm";
 import DocumentViewerModal from "./components/DocumentViewerModal";
+import MedicalAlertBanner from "./components/MedicalBannerAlert";
 import { canApproveODF, canDeleteRecords } from "./lib/roleUtils";
 import { supabase } from "./lib/supabaseClient";
 import {
@@ -166,6 +167,7 @@ function buildOdfInitialDataFromRecord(patient, record) {
     odontogramCropUrl: record?.odontogramCropUrl || rOdf.odontogramCropUrl || (isOdfRec ? pOdf.odontogramCropUrl : null) || null,
     consentCropUrl: record?.consentCropUrl || rOdf.consentCropUrl || (isOdfRec ? pOdf.consentCropUrl : null) || null,
     clinician: record?.clinician || rOdf.clinician || patient?.clinician || "",
+    approvalSignature: rOdf.approvalSignature || pOdf.approvalSignature || patient?.approvalSignature || null,
   };
 }
 
@@ -993,6 +995,8 @@ function AppRoutes() {
                     <span>🔒 <strong>Student Clinician View:</strong> You can view your submitted details and attached scans. Only Supervising Faculty and System Administrators can approve or decline ODF requests.</span>
                   </div>
                 )}
+
+                <MedicalAlertBanner odfData={activeReviewModal.odfDetails} patient={activeReviewModal} />
 
                 <div
                   style={{
