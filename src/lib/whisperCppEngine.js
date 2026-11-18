@@ -22,6 +22,37 @@ export const WHISPER_MODEL_PRESETS = {
 const DENTAL_DOMAIN_PROMPT =
   "CEU Dental Clinic Oral Diagnosis Form: caries, mandibular, maxillary, periapical, radiolucency, gingivitis, periodontitis, prophylaxis, amalgam, composite, TMJ, percussion, palpation.";
 
+export const FIELD_DENTAL_PROMPTS = {
+  historyOfPresentIllness:
+    "Chief complaint onset, pain duration, cold or heat sensitivity, swelling, percussion tenderness, spontaneous pain, analgesic relief.",
+  radiographicInterpretation:
+    "Periapical radiograph, panoramic film, radiolucency, radiopacity, lamina dura, PDL widening, bone loss, furcation involvement, apex, root canal.",
+  ciRemarks:
+    "Clinical instructor remarks, case evaluation, cavity preparation, margins, occlusion check, anesthesia, patient cooperation, approved for next step.",
+  chairsideProgressNote:
+    "Chairside progress note, anesthesia administered, carpule, lidocaine, rubber dam isolation, caries excavation, restoration, composite, temporary filling, hemostasis.",
+  handoffSummary:
+    "Shift handoff instructions, next visit plan, pending radiograph, complete excavation, permanent restoration, suture removal, recall interval, medical alert precaution.",
+};
+
+export function normalizeDentalTranscript(rawText = "") {
+  let cleaned = String(rawText || "")
+    .replace(/\[(?:BLANK_AUDIO|MUSIC|SILENCE)\]/gi, " ")
+    .replace(/\b(tooth)\s+(?:number|no\.?)\s*#?\s*(\d{1,2})\b/gi, (_, word, num) => `${word} #${num}`)
+    .replace(/\b(teeth)\s+(?:numbers?|nos?\.?)\s*#?\s*(\d{1,2})\b/gi, (_, word, num) => `${word} #${num}`)
+    .replace(/\b(tooth|teeth)\s+#\s+(\d{1,2})\b/gi, (_, word, num) => `${word} #${num}`)
+    .replace(/#\s+(\d{1,2})\b/g, "#$1")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!cleaned) return "";
+
+  cleaned = cleaned.replace(/^([a-z])/, (_, ch) => ch.toUpperCase());
+  cleaned = cleaned.replace(/([.!?]\s+)([a-z])/g, (_, punct, ch) => `${punct}${ch.toUpperCase()}`);
+  return cleaned;
+}
+
 let contextInstance = null;
 let initPromise = null;
 
@@ -137,6 +168,12 @@ export async function runTranscribeWithWhisper(audioBuffer, options = {}) {
   const inputExt = guessAudioExt(options.mimeType || "");
   const inputPath = path.join(os.tmpdir(), `whisper_in_${tempId}${inputExt}`);
 
+  const fieldSuffix =
+    options.field && FIELD_DENTAL_PROMPTS[options.field]
+      ? ` ${FIELD_DENTAL_PROMPTS[options.field]}`
+      : "";
+  const effectivePrompt = options.prompt || `${DENTAL_DOMAIN_PROMPT}${fieldSuffix}`;
+
   const t0 = Date.now();
   try {
     if (isWav) {
@@ -165,19 +202,18 @@ export async function runTranscribeWithWhisper(audioBuffer, options = {}) {
       beamSize: 1,
       bestOf: 1,
       temperature: 0.0,
-      prompt: options.prompt || DENTAL_DOMAIN_PROMPT,
+      prompt: effectivePrompt,
     });
 
     const out = await promise;
-    const text = String(out?.result || "")
-      .replace(/\[BLANK_AUDIO\]/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = normalizeDentalTranscript(out?.result || "");
+    const wordCount = text ? text.split(/\s+/).filter(Boolean).length : 0;
 
     return {
       provider: "whisper.cpp",
       modelId: cfg.modelId,
       text,
+      wordCount,
       segments: Array.isArray(out?.segments) ? out.segments : [],
       language: out?.language || options.language || "en",
       durationMs: Date.now() - t0,

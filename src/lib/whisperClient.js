@@ -124,6 +124,8 @@ export async function transcribeAudioWithWhisper(audioBlob, options = {}) {
 export function useWhisperDictation({ onTranscript, onStatusChange, onError } = {}) {
   const [recordingField, setRecordingField] = useState(null);
   const [transcribingField, setTranscribingField] = useState(null);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [audioLevel, setAudioLevel] = useState(0);
 
   const streamRef = useRef(null);
   const audioCtxRef = useRef(null);
@@ -134,9 +136,17 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
   const actualSampleRateRef = useRef(16000);
   const activeFieldRef = useRef(null);
   const isRecordingRef = useRef(false);
+  const timerIntervalRef = useRef(null);
+  const recordingStartRef = useRef(0);
 
   const cleanupAudio = useCallback(() => {
     isRecordingRef.current = false;
+
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+    recordingStartRef.current = 0;
 
     if (sourceRef.current) {
       try { sourceRef.current.disconnect(); } catch { /* ignore */ }
@@ -164,6 +174,8 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
       streamRef.current = null;
     }
     pcmChunksRef.current = [];
+    setRecordingSeconds(0);
+    setAudioLevel(0);
   }, []);
 
   useEffect(() => {
@@ -182,6 +194,8 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
 
     cleanupAudio();
     setRecordingField(null);
+    setRecordingSeconds(0);
+    setAudioLevel(0);
 
     let totalSamples = 0;
     for (const chunk of capturedChunks) {
@@ -301,6 +315,14 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
           if (!isRecordingRef.current) return;
           const inputData = e.inputBuffer.getChannelData(0);
           pcmChunksRef.current.push(new Float32Array(inputData));
+
+          let sumSq = 0;
+          for (let i = 0; i < inputData.length; i++) {
+            sumSq += inputData[i] * inputData[i];
+          }
+          const rms = Math.sqrt(sumSq / (inputData.length || 1));
+          const level = Math.min(100, Math.max(0, Math.round(rms * 350)));
+          setAudioLevel(level);
         };
 
         // Mute node to prevent microphone audio from playing through speakers (no echo/feedback)
@@ -313,6 +335,17 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
         muteNode.connect(audioCtx.destination);
 
         isRecordingRef.current = true;
+        recordingStartRef.current = Date.now();
+        setRecordingSeconds(0);
+        setAudioLevel(0);
+        if (timerIntervalRef.current) {
+          clearInterval(timerIntervalRef.current);
+        }
+        timerIntervalRef.current = setInterval(() => {
+          if (!isRecordingRef.current || !recordingStartRef.current) return;
+          setRecordingSeconds(Math.floor((Date.now() - recordingStartRef.current) / 1000));
+        }, 500);
+
         setRecordingField(field);
         onStatusChange?.("🎙️ Recording audio for local whisper.cpp — click Stop when finished.");
       } catch (err) {
@@ -331,6 +364,8 @@ export function useWhisperDictation({ onTranscript, onStatusChange, onError } = 
   return {
     recordingField,
     transcribingField,
+    recordingSeconds,
+    audioLevel,
     toggleFieldDictation,
     stopRecording,
   };

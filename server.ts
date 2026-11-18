@@ -334,10 +334,12 @@ async function startServer() {
 
       try {
         const language = typeof req.body?.language === "string" ? req.body.language : "en";
+        const field = typeof req.body?.field === "string" ? req.body.field : undefined;
         const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : undefined;
         const result = await runTranscribeWithWhisper(req.file.buffer, {
           mimeType: req.file.mimetype,
           language,
+          field,
           prompt,
         });
         res.json(result);

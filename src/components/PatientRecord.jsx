@@ -5,7 +5,9 @@ import {
   to8DigitId,
   DEFAULT_CLINICIAN,
   fetchPatientHistoryRecords,
+  saveChairsideClinicalNote,
 } from "../lib/dentalService";
+import { useWhisperDictation } from "../lib/whisperClient";
 
 const MOCK_PATIENTS = [
   { id: "10000001", name: "John Doe", lastVisit: "01/01/2026", clinician: DEFAULT_CLINICIAN },
@@ -72,6 +74,52 @@ export default function PatientRecord({
   const [isDeleting, setIsDeleting] = useState(false);
   const [patientRecordsState, setPatientRecordsState] = useState({ key: "", records: [] });
 
+  // Chairside Clinical & Handoff Note state
+  const [showChairsideForm, setShowChairsideForm] = useState(false);
+  const [chairsideForm, setChairsideForm] = useState({
+    procedure: "",
+    toothNo: "",
+    chairsideProgressNote: "",
+    handoffSummary: "",
+  });
+  const [chairsideTelemetry, setChairsideTelemetry] = useState({
+    engine: "whisper.cpp",
+    dictatedFields: [],
+    totalInferenceMs: 0,
+    lastModelId: null,
+  });
+  const [chairsideStatus, setChairsideStatus] = useState("");
+  const [savingChairsideNote, setSavingChairsideNote] = useState(false);
+  const [activeNoteModal, setActiveNoteModal] = useState(null);
+
+  const {
+    recordingField: chairsideRecordingField,
+    transcribingField: chairsideTranscribingField,
+    recordingSeconds: chairsideRecordingSeconds,
+    audioLevel: chairsideAudioLevel,
+    toggleFieldDictation: toggleChairsideDictation,
+    stopRecording: stopChairsideRecording,
+  } = useWhisperDictation({
+    onTranscript: (field, transcript, result) => {
+      setChairsideForm((prev) => ({
+        ...prev,
+        [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
+      }));
+      setChairsideTelemetry((prev) => ({
+        engine: result?.provider || prev?.engine || "whisper.cpp",
+        dictatedFields: Array.from(new Set([...(prev?.dictatedFields || []), field])),
+        totalInferenceMs: (prev?.totalInferenceMs || 0) + Number(result?.durationMs || 0),
+        lastModelId: result?.modelId || prev?.lastModelId || null,
+      }));
+    },
+    onStatusChange: (msg) => {
+      setChairsideStatus(msg);
+    },
+    onError: (errMsg) => {
+      setChairsideStatus(`✕ ${errMsg}`);
+    },
+  });
+
   const normRole = normalizeRole(currentUser?.role);
   const isPatientRole = normRole === "patient";
   const isStudent = isStudentClinician(normRole);
@@ -128,9 +176,12 @@ export default function PatientRecord({
         const targetId = to8DigitId(deleteConfirm.patient?.id);
         await onDeletePatient(deleteConfirm.patient);
         if (selectedPatientId === targetId) {
+          stopChairsideRecording();
           setSelectedPatientId(null);
           setVisitHistory([]);
           setSelectedRecordIds([]);
+          setShowChairsideForm(false);
+          setActiveNoteModal(null);
         }
       } else if (deleteConfirm.mode === "records") {
         const recs = deleteConfirm.records || [];
@@ -142,6 +193,67 @@ export default function PatientRecord({
     } finally {
       setIsDeleting(false);
       setDeleteConfirm(null);
+    }
+  };
+
+  const handleSaveChairsideNote = async (e) => {
+    e.preventDefault();
+    if (!selectedPatient || savingChairsideNote) return;
+
+    const progressNote = chairsideForm.chairsideProgressNote.trim();
+    const handoffInstructions = chairsideForm.handoffSummary.trim();
+    if (!progressNote && !handoffInstructions) {
+      setChairsideStatus(
+        "✕ Please enter or dictate a Chairside Clinical Progress Note or Shift Handoff instruction before saving."
+      );
+      return;
+    }
+
+    setSavingChairsideNote(true);
+    setChairsideStatus("");
+    try {
+      const clinicianLabel = currentUser?.name
+        ? `${currentUser.name} (${currentUser.role})`
+        : currentUser?.email || selectedPatient.clinician || DEFAULT_CLINICIAN;
+
+      const res = await saveChairsideClinicalNote(selectedPatient, {
+        procedure: chairsideForm.procedure.trim() || "Chairside Clinical Progress Note",
+        toothNo: chairsideForm.toothNo.trim(),
+        progressNote,
+        handoffInstructions,
+        clinician: clinicianLabel,
+        dictatedWithWhisper: chairsideTelemetry.dictatedFields.length > 0,
+        dictationMeta:
+          chairsideTelemetry.dictatedFields.length > 0 ? { ...chairsideTelemetry } : null,
+      });
+
+      if (res?.success && res.data) {
+        setVisitHistory((prev) => [res.data, ...prev.filter((r) => r.id !== res.data.id)]);
+        setChairsideForm({
+          procedure: "",
+          toothNo: "",
+          chairsideProgressNote: "",
+          handoffSummary: "",
+        });
+        setChairsideTelemetry({
+          engine: "whisper.cpp",
+          dictatedFields: [],
+          totalInferenceMs: 0,
+          lastModelId: null,
+        });
+        setShowChairsideForm(false);
+        setChairsideStatus(
+          res.syncedToCloud
+            ? "✓ Chairside clinical & handoff note saved and synced."
+            : "✓ Chairside clinical & handoff note saved to clinical history."
+        );
+      } else {
+        setChairsideStatus(`✕ ${res?.error || "Unable to save chairside clinical note."}`);
+      }
+    } catch (err) {
+      setChairsideStatus(`✕ ${err?.message || "Unable to save chairside clinical note."}`);
+    } finally {
+      setSavingChairsideNote(false);
     }
   };
 
@@ -375,6 +487,191 @@ export default function PatientRecord({
     const allergyLines = buildAllergyLines(selectedPatient);
     const selectedRecordsObjects = visitHistory.filter((r) => validSelectedIds.includes(r.id));
 
+    const handoffRecords = visitHistory.filter(
+      (r) =>
+        Boolean(r.handoffInstructions && r.handoffInstructions.trim()) ||
+        (r.type === "chairside_note" && Boolean(r.diagnosis && r.diagnosis.trim()))
+    );
+    const latestHandoffRecord = handoffRecords.reduce((best, cur) => {
+      if (!best) return cur;
+      const curTs = Date.parse(cur.date || "") || 0;
+      const bestTs = Date.parse(best.date || "") || 0;
+      return curTs > bestTs ? cur : best;
+    }, null);
+    const latestHandoffText = latestHandoffRecord
+      ? (latestHandoffRecord.handoffInstructions || latestHandoffRecord.diagnosis || "").trim()
+      : "";
+
+    const renderChairsideNoteModal = () => {
+      if (!activeNoteModal) return null;
+      const modalHandoff = (
+        activeNoteModal.handoffInstructions ||
+        (activeNoteModal.type === "chairside_note" ? activeNoteModal.diagnosis : "") ||
+        ""
+      ).trim();
+      const dictatedList = activeNoteModal.dictationMeta?.dictatedFields || [];
+
+      return (
+        <div
+          className="confirm-modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Chairside Clinical & Handoff Note"
+          onClick={() => setActiveNoteModal(null)}
+        >
+          <div
+            className="confirm-modal-card"
+            style={{ maxWidth: "600px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="confirm-modal-header">
+              <div>
+                <h3 className="confirm-modal-title">Chairside Clinical &amp; Handoff Note</h3>
+                <div style={{ fontSize: "12px", color: "#475569", marginTop: "2px" }}>
+                  {selectedPatient.name} · ID #{formattedId}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="confirm-modal-close"
+                onClick={() => setActiveNoteModal(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="confirm-modal-body" style={{ display: "grid", gap: "12px" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: "8px",
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "10px",
+                  padding: "10px 12px",
+                  fontSize: "12.5px",
+                }}
+              >
+                <div>
+                  <div style={{ color: "#64748b", fontSize: "11px", fontWeight: 700 }}>VISIT DATE</div>
+                  <div style={{ fontWeight: 700, color: "#0f172a", fontVariantNumeric: "tabular-nums" }}>
+                    {activeNoteModal.date || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: "11px", fontWeight: 700 }}>CLINICIAN</div>
+                  <div style={{ fontWeight: 600, color: "#0f172a" }}>
+                    {activeNoteModal.clinician || DEFAULT_CLINICIAN}
+                  </div>
+                </div>
+                {activeNoteModal.toothNo && (
+                  <div>
+                    <div style={{ color: "#64748b", fontSize: "11px", fontWeight: 700 }}>TOOTH NO.</div>
+                    <div style={{ fontWeight: 700, color: "#205136" }}>{activeNoteModal.toothNo}</div>
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#64748b", marginBottom: "4px" }}>
+                  PROCEDURE / VISIT FOCUS
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>
+                    {activeNoteModal.title || "Chairside Clinical Progress Note"}
+                  </strong>
+                  {activeNoteModal.status && (
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "2px 8px",
+                        borderRadius: "999px",
+                        background:
+                          activeNoteModal.status === "Whisper.cpp Dictated" ? "#eef5f0" : "#f1f5f9",
+                        color:
+                          activeNoteModal.status === "Whisper.cpp Dictated" ? "#205136" : "#334155",
+                        border: "1px solid #cbd5e1",
+                      }}
+                    >
+                      {activeNoteModal.status}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "#64748b", marginBottom: "4px" }}>
+                  CHAIRSIDE CLINICAL PROGRESS NOTE
+                </div>
+                <div
+                  style={{
+                    background: "#ffffff",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                    fontSize: "13px",
+                    lineHeight: 1.5,
+                    color: "#1e293b",
+                    whiteSpace: "pre-wrap",
+                  }}
+                >
+                  {activeNoteModal.notes || "No progress note text recorded."}
+                </div>
+              </div>
+
+              {modalHandoff && (
+                <div
+                  style={{
+                    background: "#fffbeb",
+                    border: "1px solid #fcd34d",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                  }}
+                >
+                  <div style={{ fontSize: "11.5px", fontWeight: 800, color: "#92400e", marginBottom: "4px" }}>
+                    NEXT-VISIT SHIFT HANDOFF INSTRUCTIONS
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "13px",
+                      lineHeight: 1.5,
+                      color: "#78350f",
+                      whiteSpace: "pre-wrap",
+                    }}
+                  >
+                    {modalHandoff}
+                  </div>
+                </div>
+              )}
+
+              {dictatedList.length > 0 && (
+                <div style={{ fontSize: "11.5px", color: "#475569" }}>
+                  Dictated locally via whisper.cpp ({activeNoteModal.dictationMeta?.lastModelId || "base.en-q5_1"} ·{" "}
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {activeNoteModal.dictationMeta?.totalInferenceMs || 0}ms
+                  </span>
+                  )
+                </div>
+              )}
+
+              <div className="confirm-modal-actions">
+                <button
+                  type="button"
+                  className="pill pill--primary"
+                  style={{ height: "36px", padding: "0 18px" }}
+                  onClick={() => setActiveNoteModal(null)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
     return (
       <Layout
         active="patients"
@@ -407,9 +704,13 @@ export default function PatientRecord({
               type="button"
               className="pill"
               onClick={() => {
+                stopChairsideRecording();
                 setSelectedPatientId(null);
                 setVisitHistory([]);
                 setSelectedRecordIds([]);
+                setShowChairsideForm(false);
+                setActiveNoteModal(null);
+                setChairsideStatus("");
               }}
             >
               ← Back to Patient Records
@@ -528,6 +829,383 @@ export default function PatientRecord({
           </section>
         </div>
 
+        {/* Active Clinical Handoff Banner */}
+        {latestHandoffRecord && latestHandoffText && (
+          <div
+            role="region"
+            aria-label="Active Clinical Handoff"
+            style={{
+              background: "#fffbeb",
+              border: "1px solid #f59e0b",
+              borderLeft: "4px solid #d97706",
+              borderRadius: "12px",
+              padding: "14px 16px",
+              marginBottom: "14px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "6px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "10px",
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 800,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    padding: "2px 8px",
+                    borderRadius: "999px",
+                    background: "#fef3c7",
+                    color: "#92400e",
+                    border: "1px solid #fcd34d",
+                  }}
+                >
+                  Active Clinical Handoff
+                </span>
+                <strong style={{ fontSize: "13.5px", color: "#78350f" }}>
+                  {latestHandoffRecord.title || "Next-Visit Continuity Instructions"}
+                  {latestHandoffRecord.toothNo ? ` (${latestHandoffRecord.toothNo})` : ""}
+                </strong>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                  fontSize: "12px",
+                  color: "#92400e",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                <span>
+                  {latestHandoffRecord.date || "Recent"} ·{" "}
+                  {latestHandoffRecord.clinician || DEFAULT_CLINICIAN}
+                </span>
+                <button
+                  type="button"
+                  className="table__action table__action--review"
+                  onClick={() => setActiveNoteModal(latestHandoffRecord)}
+                >
+                  Open Note
+                </button>
+              </div>
+            </div>
+            <p
+              style={{
+                margin: 0,
+                fontSize: "13px",
+                lineHeight: 1.5,
+                color: "#78350f",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {latestHandoffText}
+            </p>
+          </div>
+        )}
+
+        {/* Collapsible Chairside Clinical & Shift Handoff Note Composer */}
+        <div style={{ marginBottom: "14px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "10px",
+              flexWrap: "wrap",
+              marginBottom: showChairsideForm ? "10px" : "0",
+            }}
+          >
+            <button
+              type="button"
+              className="pill pill--primary"
+              onClick={() => {
+                if (showChairsideForm) stopChairsideRecording();
+                setShowChairsideForm((prev) => !prev);
+              }}
+            >
+              {showChairsideForm ? "− Hide Chairside Note Form" : "+ Chairside Clinical & Handoff Note"}
+            </button>
+
+            {chairsideStatus && (
+              <span
+                role="status"
+                style={{
+                  fontSize: "12.5px",
+                  fontWeight: 600,
+                  color: chairsideStatus.startsWith("✕")
+                    ? "#b91c1c"
+                    : chairsideStatus.startsWith("✓")
+                    ? "#047857"
+                    : "#0f172a",
+                }}
+              >
+                {chairsideStatus}
+              </span>
+            )}
+          </div>
+
+          {showChairsideForm && (
+            <form
+              onSubmit={handleSaveChairsideNote}
+              style={{
+                background: "#ffffff",
+                border: "1px solid #cbd5e1",
+                borderRadius: "14px",
+                padding: "16px",
+                display: "grid",
+                gap: "12px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <strong style={{ fontSize: "14px", color: "#0f172a" }}>
+                  Chairside Clinical &amp; Shift Handoff Note
+                </strong>
+                {chairsideRecordingField && (
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      fontSize: "11.5px",
+                      fontWeight: 700,
+                      color: "#b91c1c",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    <span>Mic Input: {chairsideAudioLevel}%</span>
+                    <div
+                      aria-hidden="true"
+                      style={{
+                        width: "72px",
+                        height: "6px",
+                        borderRadius: "999px",
+                        background: "#fee2e2",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${chairsideAudioLevel}%`,
+                          height: "100%",
+                          background: "#dc2626",
+                          transition: "width 80ms linear",
+                        }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "2fr 1fr",
+                  gap: "12px",
+                }}
+              >
+                <label style={{ display: "grid", gap: "4px", fontSize: "12px", fontWeight: 700, color: "#334155" }}>
+                  Procedure / Visit Focus
+                  <input
+                    type="text"
+                    value={chairsideForm.procedure}
+                    onChange={(e) =>
+                      setChairsideForm((prev) => ({ ...prev, procedure: e.target.value }))
+                    }
+                    placeholder="e.g. Composite Restoration Class II, Endo Access"
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: "8px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "13px",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </label>
+
+                <label style={{ display: "grid", gap: "4px", fontSize: "12px", fontWeight: 700, color: "#334155" }}>
+                  Tooth No. (Optional)
+                  <input
+                    type="text"
+                    value={chairsideForm.toothNo}
+                    onChange={(e) =>
+                      setChairsideForm((prev) => ({ ...prev, toothNo: e.target.value }))
+                    }
+                    placeholder="e.g. 36 or 14, 15"
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: "8px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "13px",
+                      fontFamily: "inherit",
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div style={{ display: "grid", gap: "5px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <label
+                    htmlFor="chairside-progress-note"
+                    style={{ fontSize: "12px", fontWeight: 700, color: "#334155" }}
+                  >
+                    Chairside Clinical Progress Note
+                  </label>
+                  <button
+                    type="button"
+                    disabled={Boolean(chairsideTranscribingField)}
+                    className={`ceu-mic-btn ${
+                      chairsideRecordingField === "chairsideProgressNote"
+                        ? "listening"
+                        : chairsideTranscribingField === "chairsideProgressNote"
+                        ? "transcribing"
+                        : ""
+                    }`}
+                    onClick={() => toggleChairsideDictation("chairsideProgressNote")}
+                    title="Dictate progress note locally with OpenAI whisper.cpp"
+                    style={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {chairsideRecordingField === "chairsideProgressNote"
+                      ? `⏹ Stop & Transcribe (${chairsideRecordingSeconds}s)`
+                      : chairsideTranscribingField === "chairsideProgressNote"
+                      ? "⏳ Whisper.cpp..."
+                      : "🎙️ Dictate"}
+                  </button>
+                </div>
+                <textarea
+                  id="chairside-progress-note"
+                  rows={3}
+                  value={chairsideForm.chairsideProgressNote}
+                  onChange={(e) =>
+                    setChairsideForm((prev) => ({
+                      ...prev,
+                      chairsideProgressNote: e.target.value,
+                    }))
+                  }
+                  placeholder="Document anesthesia, isolation, operative steps completed, materials used, and patient response..."
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    border: "1px solid #cbd5e1",
+                    fontSize: "13px",
+                    fontFamily: "inherit",
+                    resize: "vertical",
+                  }}
+                />
+              </div>
+
+              <div style={{ display: "grid", gap: "5px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "8px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <label
+                    htmlFor="chairside-handoff-note"
+                    style={{ fontSize: "12px", fontWeight: 700, color: "#92400e" }}
+                  >
+                    Next-Visit Shift Handoff Instructions
+                  </label>
+                  <button
+                    type="button"
+                    disabled={Boolean(chairsideTranscribingField)}
+                    className={`ceu-mic-btn ${
+                      chairsideRecordingField === "handoffSummary"
+                        ? "listening"
+                        : chairsideTranscribingField === "handoffSummary"
+                        ? "transcribing"
+                        : ""
+                    }`}
+                    onClick={() => toggleChairsideDictation("handoffSummary")}
+                    title="Dictate shift handoff locally with OpenAI whisper.cpp"
+                    style={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {chairsideRecordingField === "handoffSummary"
+                      ? `⏹ Stop & Transcribe (${chairsideRecordingSeconds}s)`
+                      : chairsideTranscribingField === "handoffSummary"
+                      ? "⏳ Whisper.cpp..."
+                      : "🎙️ Dictate"}
+                  </button>
+                </div>
+                <textarea
+                  id="chairside-handoff-note"
+                  rows={2}
+                  value={chairsideForm.handoffSummary}
+                  onChange={(e) =>
+                    setChairsideForm((prev) => ({ ...prev, handoffSummary: e.target.value }))
+                  }
+                  placeholder="Specify pending steps, recall timing, temporary dressing precautions, or next clinician instructions..."
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: "8px",
+                    border: "1px solid #fcd34d",
+                    background: "#fffbeb",
+                    fontSize: "13px",
+                    fontFamily: "inherit",
+                    resize: "vertical",
+                  }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: "10px",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  className="pill"
+                  onClick={() => {
+                    stopChairsideRecording();
+                    setShowChairsideForm(false);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="pill pill--primary"
+                  disabled={savingChairsideNote || Boolean(chairsideTranscribingField)}
+                >
+                  {savingChairsideNote ? "Saving Note..." : "Save Clinical & Handoff Note"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+
         {/* Bottom Visit History Table */}
         <div className="table-wrap">
           {allowDelete && visitHistory.length > 0 && (
@@ -598,6 +1276,18 @@ export default function PatientRecord({
                   <>
                     {visitHistory.map((rec) => {
                       const isChecked = validSelectedIds.includes(rec.id);
+                      const typeBadge =
+                        rec.typeLabel ||
+                        (rec.type === "chairside_note"
+                          ? "Chairside Note"
+                          : rec.type === "odf"
+                          ? "ODF Form"
+                          : "Clinical Record");
+                      const shortSummary = (rec.title || rec.summary || "").trim();
+                      const hasHandoff = Boolean(
+                        (rec.handoffInstructions && rec.handoffInstructions.trim()) ||
+                          (rec.type === "chairside_note" && rec.diagnosis && rec.diagnosis.trim())
+                      );
                       return (
                         <tr key={rec.id}>
                           {allowDelete && (
@@ -612,7 +1302,49 @@ export default function PatientRecord({
                             </td>
                           )}
                           <td className="table__date-cell" style={{ fontWeight: 600 }}>
-                            {rec.date || selectedPatient.lastVisit || "01/01/2026"}
+                            <div>{rec.date || selectedPatient.lastVisit || "01/01/2026"}</div>
+                            <div
+                              style={{
+                                fontSize: "11.5px",
+                                fontWeight: 500,
+                                color: "#475569",
+                                marginTop: "2px",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "6px",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontWeight: 700,
+                                  color: rec.type === "chairside_note" ? "#205136" : "#334155",
+                                }}
+                              >
+                                {typeBadge}
+                              </span>
+                              {rec.toothNo && <span>· {rec.toothNo}</span>}
+                              {shortSummary && (
+                                <span style={{ color: "#64748b" }}>
+                                  — {shortSummary.length > 52 ? `${shortSummary.slice(0, 52)}…` : shortSummary}
+                                </span>
+                              )}
+                              {hasHandoff && (
+                                <span
+                                  style={{
+                                    fontSize: "10px",
+                                    fontWeight: 700,
+                                    padding: "1px 6px",
+                                    borderRadius: "999px",
+                                    background: "#fffbeb",
+                                    color: "#92400e",
+                                    border: "1px solid #fcd34d",
+                                  }}
+                                >
+                                  Handoff
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td>{rec.clinician || selectedPatient.clinician || DEFAULT_CLINICIAN}</td>
                           <td className="table__actions-cell">
@@ -620,8 +1352,18 @@ export default function PatientRecord({
                               <button
                                 type="button"
                                 className="table__action table__action--review"
-                                onClick={() => onViewRecords(selectedPatient, rec)}
-                                title={`Open full 2-page form for ${rec.title || "record"}`}
+                                onClick={() => {
+                                  if (rec.type === "chairside_note") {
+                                    setActiveNoteModal(rec);
+                                  } else {
+                                    onViewRecords(selectedPatient, rec);
+                                  }
+                                }}
+                                title={
+                                  rec.type === "chairside_note"
+                                    ? `View chairside & handoff note: ${rec.title || "record"}`
+                                    : `Open full 2-page form for ${rec.title || "record"}`
+                                }
                               >
                                 View Record
                               </button>
@@ -665,6 +1407,7 @@ export default function PatientRecord({
           </div>
         </div>
 
+        {renderChairsideNoteModal()}
         {renderDeleteModal()}
       </Layout>
     );

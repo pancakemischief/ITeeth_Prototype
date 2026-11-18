@@ -498,6 +498,24 @@ export default function OralDiagnosisForm({
     };
   });
 
+  const [dictationTelemetry, setDictationTelemetry] = useState(() => {
+    const existing = initialData?.dictationTelemetry;
+    if (existing && typeof existing === "object") {
+      return {
+        engine: existing.engine || "whisper.cpp",
+        dictatedFields: Array.isArray(existing.dictatedFields) ? [...existing.dictatedFields] : [],
+        totalInferenceMs: Number(existing.totalInferenceMs || 0),
+        lastModelId: existing.lastModelId || null,
+      };
+    }
+    return {
+      engine: "whisper.cpp",
+      dictatedFields: [],
+      totalInferenceMs: 0,
+      lastModelId: null,
+    };
+  });
+
   const [signatureCheck, setSignatureCheck] = useState({
     expectedHash: "",
     status: null, // "verified" | "tampered"
@@ -878,12 +896,28 @@ export default function OralDiagnosisForm({
   const {
     recordingField,
     transcribingField,
+    recordingSeconds,
+    audioLevel,
     toggleFieldDictation: toggleDictation,
   } = useWhisperDictation({
-    onTranscript: (field, transcript) => {
+    onTranscript: (field, transcript, result) => {
       setForm((prev) => ({
         ...prev,
         [field]: prev[field] ? `${prev[field]} ${transcript}` : transcript,
+        ...(prev.ocrConfidence?.[field] !== undefined
+          ? {
+              ocrVerifiedFields: {
+                ...(prev.ocrVerifiedFields || {}),
+                [field]: true,
+              },
+            }
+          : {}),
+      }));
+      setDictationTelemetry((prev) => ({
+        engine: result?.provider || prev?.engine || "whisper.cpp",
+        dictatedFields: Array.from(new Set([...(prev?.dictatedFields || []), field])),
+        totalInferenceMs: (prev?.totalInferenceMs || 0) + Number(result?.durationMs || 0),
+        lastModelId: result?.modelId || prev?.lastModelId || null,
       }));
     },
     onStatusChange: (msg) => {
@@ -1205,6 +1239,7 @@ export default function OralDiagnosisForm({
       consentCropUrl: form.consentCropUrl,
       odfDetails: {
         ...form,
+        dictationTelemetry,
         approvalSignature: null,
         reviewFeedback: null,
         clinician: activeClinician,
@@ -1894,9 +1929,10 @@ export default function OralDiagnosisForm({
                         }`}
                         onClick={() => toggleDictation("historyOfPresentIllness")}
                         title="Dictate locally with OpenAI whisper.cpp"
+                        style={{ fontVariantNumeric: "tabular-nums" }}
                       >
                         {recordingField === "historyOfPresentIllness"
-                          ? "⏹ Stop & Transcribe"
+                          ? `⏹ Stop & Transcribe (${recordingSeconds}s · ${audioLevel}%)`
                           : transcribingField === "historyOfPresentIllness"
                           ? "⏳ Whisper.cpp..."
                           : "🎙️ Dictate"}
@@ -2819,9 +2855,10 @@ export default function OralDiagnosisForm({
                         }`}
                         onClick={() => toggleDictation("radiographicInterpretation")}
                         title="Dictate locally with OpenAI whisper.cpp"
+                        style={{ fontVariantNumeric: "tabular-nums" }}
                       >
                         {recordingField === "radiographicInterpretation"
-                          ? "⏹ Stop & Transcribe"
+                          ? `⏹ Stop & Transcribe (${recordingSeconds}s · ${audioLevel}%)`
                           : transcribingField === "radiographicInterpretation"
                           ? "⏳ Whisper.cpp..."
                           : "🎙️ Dictate"}
@@ -3019,15 +3056,37 @@ export default function OralDiagnosisForm({
 
                   {/* CI's Remarks moved below the table */}
                   <div className="ceu-ci-remarks-container" style={{ marginTop: "12px" }}>
-                    <div className="ceu-subheading">
+                    <div className="ceu-subheading ceu-subheading--with-action" style={{ gap: "8px", flexWrap: "wrap" }}>
                       <strong>CI's Remarks:</strong>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          disabled={Boolean(transcribingField)}
+                          className={`ceu-mic-btn ${
+                            recordingField === "ciRemarks"
+                              ? "listening"
+                              : transcribingField === "ciRemarks"
+                              ? "transcribing"
+                              : ""
+                          }`}
+                          onClick={() => toggleDictation("ciRemarks")}
+                          title="Dictate locally with OpenAI whisper.cpp"
+                          style={{ fontVariantNumeric: "tabular-nums" }}
+                        >
+                          {recordingField === "ciRemarks"
+                            ? `⏹ Stop & Transcribe (${recordingSeconds}s · ${audioLevel}%)`
+                            : transcribingField === "ciRemarks"
+                            ? "⏳ Whisper.cpp..."
+                            : "🎙️ Dictate"}
+                        </button>
+                      )}
                     </div>
                     <textarea
                       rows={3}
                       className="ceu-ruled-textarea"
                       value={form.ciRemarks}
                       onChange={(e) => updateField("ciRemarks", e.target.value)}
-                      placeholder=""
+                      placeholder={readOnly ? "" : "Record clinical instructor notes, case evaluation, or dictation..."}
                     />
                   </div>
                 </section>

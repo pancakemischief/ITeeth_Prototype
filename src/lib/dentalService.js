@@ -1388,6 +1388,124 @@ export async function declinePendingInSupabase(item, reviewFeedback = null) {
   }
 }
 
+async function computeNoteSha256(noteObj = {}) {
+  if (typeof crypto === "undefined" || !crypto.subtle) return "";
+  const encoded = new TextEncoder().encode(JSON.stringify(noteObj));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Saves a chairside clinical progress note & optional shift handoff instructions.
+ * Persists immediately to local session history, syncs to Supabase `treatment_records`,
+ * and logs an immutable SHA-256 audit entry (`CHAIRSIDE_NOTE_ADDED`).
+ */
+export async function saveChairsideClinicalNote(patient, noteInput = {}) {
+  if (!patient) {
+    return { success: false, error: "No patient selected.", data: null };
+  }
+
+  const numericId = to8DigitId(patient.id || patient.eightDigitId);
+  const progressNote = String(noteInput.progressNote ?? noteInput.notes ?? "").trim();
+  const handoffInstructions = String(noteInput.handoffInstructions ?? "").trim();
+  const procedureTitle =
+    String(noteInput.procedure || noteInput.title || "").trim() ||
+    "Chairside Clinical Progress Note";
+  const rawTooth = String(noteInput.toothNo || "").trim().replace(/^tooth\s*#?\s*/i, "");
+  const formattedTooth = rawTooth ? `Tooth #${rawTooth}` : null;
+  const clinician =
+    String(noteInput.clinician || patient.clinician || UNASSIGNED_CLINICIAN).trim() ||
+    UNASSIGNED_CLINICIAN;
+  const dictatedWithWhisper = Boolean(noteInput.dictatedWithWhisper);
+  const dictationMeta = noteInput.dictationMeta || null;
+  const displayDate = getTodayManilaDisplay();
+  const isoDate = getTodayManilaIso();
+
+  let noteRecord = {
+    id: `cs_${numericId}_${Date.now()}`,
+    patientId: numericId,
+    type: "chairside_note",
+    typeLabel: handoffInstructions ? "Chairside & Handoff Note" : "Chairside Note",
+    status: dictatedWithWhisper ? "Whisper.cpp Dictated" : "Recorded",
+    date: displayDate,
+    dateFormatted: formatDateParts(displayDate),
+    clinician,
+    toothNo: formattedTooth,
+    title: procedureTitle,
+    notes: progressNote,
+    diagnosis: handoffInstructions,
+    handoffInstructions,
+    summary: progressNote || handoffInstructions || procedureTitle,
+    dictationMeta,
+  };
+
+  saveLocalRecord(noteRecord);
+
+  let syncedToCloud = false;
+  if (patient.dbId && isUuid(patient.dbId)) {
+    try {
+      const dbDiagnosis = handoffInstructions ? `[HANDOFF] ${handoffInstructions}` : "";
+      const { data, error } = await supabase
+        .from("treatment_records")
+        .insert({
+          patient_id: patient.dbId,
+          treatment_date: isoDate,
+          procedure_name: procedureTitle,
+          tooth_number: rawTooth || null,
+          diagnosis: dbDiagnosis,
+          notes: progressNote,
+        })
+        .select();
+
+      if (!error && Array.isArray(data) && data[0]?.id) {
+        syncedToCloud = true;
+        const tempId = noteRecord.id;
+        noteRecord = {
+          ...noteRecord,
+          id: `tr_${data[0].id}`,
+        };
+        const currentLocal = getLocalRecords();
+        saveLocalRecordsList([
+          noteRecord,
+          ...currentLocal.filter((r) => r.id !== tempId && r.id !== noteRecord.id),
+        ]);
+      } else if (error) {
+        console.warn("[Supabase] Chairside note insert warning:", error.message);
+      }
+    } catch (err) {
+      console.warn("[Supabase] Unexpected error saving chairside note:", err);
+    }
+  }
+
+  const noteHash = await computeNoteSha256({
+    eightDigitId: numericId,
+    recordId: noteRecord.id,
+    date: isoDate,
+    procedureTitle,
+    toothNo: rawTooth,
+    progressNote,
+    handoffInstructions,
+    clinician,
+  });
+
+  await logClinicalAuditEvent("CHAIRSIDE_NOTE_ADDED", numericId, noteRecord.id, noteHash, {
+    title: procedureTitle,
+    toothNo: formattedTooth,
+    hasHandoff: Boolean(handoffInstructions),
+    dictatedWithWhisper,
+    dictationMeta,
+    clinician,
+  });
+
+  return {
+    success: true,
+    syncedToCloud,
+    data: noteRecord,
+  };
+}
+
 /**
  * Fetches all historical records for a specific patient:
  * Combines treatment_records, pending_approvals, appointments, and local consultations
@@ -1478,30 +1596,42 @@ export async function fetchPatientHistoryRecords(patient) {
         .order("treatment_date", { ascending: false });
 
       if (Array.isArray(treatments)) {
-        treatments.forEach((t) => {
-          const treatmentDate =
-            t.treatment_date ||
-            (t.created_at
-              ? new Intl.DateTimeFormat("en-US", {
-                  timeZone: "Asia/Manila",
-                  month: "2-digit",
-                  day: "2-digit",
-                  year: "numeric",
-                }).format(new Date(t.created_at))
-              : getTodayManilaDisplay());
+        [...treatments].reverse().forEach((t) => {
+          const rawDiag = String(t.diagnosis || "");
+          const isHandoffNote = rawDiag.startsWith("[HANDOFF]");
+          const strippedHandoff = isHandoffNote
+            ? rawDiag.replace(/^\[HANDOFF\]\s*/i, "").trim()
+            : "";
+
+          let treatmentDate = getTodayManilaDisplay();
+          if (t.treatment_date) {
+            const isoMatch = String(t.treatment_date).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            treatmentDate = isoMatch
+              ? `${isoMatch[2]}/${isoMatch[3]}/${isoMatch[1]}`
+              : String(t.treatment_date);
+          } else if (t.created_at) {
+            treatmentDate = new Intl.DateTimeFormat("en-US", {
+              timeZone: "Asia/Manila",
+              month: "2-digit",
+              day: "2-digit",
+              year: "numeric",
+            }).format(new Date(t.created_at));
+          }
+
           recordsList.unshift({
             id: `tr_${t.id}`,
             date: treatmentDate,
             dateFormatted: formatDateParts(t.treatment_date || t.created_at),
             title: t.procedure_name || "Dental Treatment",
-            type: "treatment",
-            typeLabel: "Treatment Record",
-            status: "Recorded in DB",
+            type: isHandoffNote ? "chairside_note" : "treatment",
+            typeLabel: isHandoffNote ? "Chairside & Handoff Note" : "Treatment Record",
+            status: isHandoffNote ? "Handoff Active" : "Recorded in DB",
             toothNo: t.tooth_number ? `Tooth #${t.tooth_number}` : null,
             clinician: patient.clinician || UNASSIGNED_CLINICIAN,
-            diagnosis: t.diagnosis || "",
-            summary: t.notes || t.procedure_name,
-            notes: t.notes,
+            diagnosis: isHandoffNote ? strippedHandoff : rawDiag,
+            handoffInstructions: strippedHandoff,
+            summary: t.notes || strippedHandoff || t.procedure_name,
+            notes: t.notes || "",
           });
         });
       }
