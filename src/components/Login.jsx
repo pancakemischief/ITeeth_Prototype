@@ -1,47 +1,58 @@
 import { useState } from "react";
+import { supabase } from "../lib/supabaseClient";
 
-const ROLES = [
-  "Student Clinician",
-  "Dentistry Department Faculty",
-  "System Administrator",
-  "Patient",
-];
+function getFriendlySignInError(error) {
+  const msg = String(error?.message || "").toLowerCase();
+  if (msg.includes("invalid login credentials") || msg.includes("invalid_credentials")) {
+    return "Invalid email or password. Please check your credentials and try again.";
+  }
+  if (msg.includes("email not confirmed")) {
+    return "Your account email has not been confirmed yet. Please check your inbox.";
+  }
+  if (msg.includes("too many requests") || error?.status === 429) {
+    return "Too many sign-in attempts. Please wait a moment and try again.";
+  }
+  if (msg.includes("network") || msg.includes("failed to fetch")) {
+    return "Unable to reach the authentication service. Please check your connection.";
+  }
+  return "Unable to sign in. Please verify your email and password and try again.";
+}
 
-export default function Login({ onLogin = () => {} }) {
-  const [role, setRole] = useState("Student Clinician");
-  const [email, setEmail] = useState("student@ceu.edu.ph");
-  const [password, setPassword] = useState("••••••••");
-  const [employeeId, setEmployeeId] = useState("FAC-2026-042");
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+export default function Login({ authError = "", onClearError = () => {} }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [localError, setLocalError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const isEmployee =
-    role === "Dentistry Department Faculty" || role === "System Administrator";
+  const displayedError = localError || authError;
 
-  const handleRoleChange = (newRole) => {
-    setRole(newRole);
-    setIsDropdownOpen(false);
-
-    // Auto-update sample placeholders to be helpful
-    if (newRole === "Student Clinician") {
-      setEmail("student@ceu.edu.ph");
-    } else if (newRole === "Dentistry Department Faculty") {
-      setEmail("faculty@ceu.edu.ph");
-      setEmployeeId("FAC-2026-042");
-    } else if (newRole === "System Administrator") {
-      setEmail("admin@ceu.edu.ph");
-      setEmployeeId("ADM-2026-001");
-    } else if (newRole === "Patient") {
-      setEmail("patient.johndoe@gmail.com");
-    }
-  };
-
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onLogin({
-      role,
-      email,
-      employeeId: isEmployee ? employeeId : null,
-    });
+    const trimmedEmail = email.trim();
+
+    setLocalError("");
+    onClearError();
+
+    if (!trimmedEmail || !password) {
+      setLocalError("Please enter both your email address and password.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: trimmedEmail,
+        password,
+      });
+
+      if (error) {
+        setLocalError(getFriendlySignInError(error));
+      }
+    } catch {
+      setLocalError("Unable to reach the authentication service. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -136,201 +147,29 @@ export default function Login({ onLogin = () => {} }) {
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} style={{ padding: "26px 24px 28px" }}>
-          {/* Account Role Dropdown */}
-          <div style={{ marginBottom: "18px", position: "relative" }}>
-            <label
+          {displayedError && (
+            <div
+              role="alert"
               style={{
-                display: "block",
-                fontSize: "11px",
-                fontWeight: "700",
-                color: "#334155",
-                letterSpacing: "0.6px",
-                textTransform: "uppercase",
-                marginBottom: "6px",
+                marginBottom: "18px",
+                padding: "11px 14px",
+                borderRadius: "12px",
+                background: "#fef2f2",
+                border: "1.5px solid #fecaca",
+                color: "#b91c1c",
+                fontSize: "12.5px",
+                fontWeight: "600",
+                lineHeight: "1.45",
               }}
             >
-              Account Role
-            </label>
-
-            <button
-              type="button"
-              onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-              style={{
-                width: "100%",
-                height: "46px",
-                padding: "0 16px",
-                background: "#f8fafc",
-                border: "2px solid #e91e77",
-                borderRadius: "14px",
-                fontSize: "13.5px",
-                fontWeight: "500",
-                color: "#0f172a",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                cursor: "pointer",
-                outline: "none",
-                textAlign: "left",
-                boxShadow: isDropdownOpen
-                  ? "0 0 0 3px rgba(233, 30, 119, 0.2)"
-                  : "none",
-                transition: "all 0.2s ease",
-              }}
-              aria-haspopup="listbox"
-              aria-expanded={isDropdownOpen}
-            >
-              <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {role}
-              </span>
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#64748b"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{
-                  transform: isDropdownOpen ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: "transform 0.2s ease",
-                  flexShrink: 0,
-                  marginLeft: "8px",
-                }}
-              >
-                <polyline points="6 9 12 15 18 9" />
-              </svg>
-            </button>
-
-            {/* Custom Dropdown Menu */}
-            {isDropdownOpen && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "calc(100% + 6px)",
-                  left: 0,
-                  right: 0,
-                  background: "#ffffff",
-                  borderRadius: "14px",
-                  border: "1.5px solid #e2e8f0",
-                  boxShadow: "0 12px 28px -4px rgba(0, 0, 0, 0.15)",
-                  zIndex: 50,
-                  overflow: "hidden",
-                  padding: "4px",
-                }}
-              >
-                {ROLES.map((r) => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => handleRoleChange(r)}
-                    style={{
-                      width: "100%",
-                      padding: "10px 14px",
-                      textAlign: "left",
-                      background: r === role ? "#fdf2f8" : "transparent",
-                      color: r === role ? "#e91e77" : "#1e293b",
-                      fontWeight: r === role ? "700" : "500",
-                      fontSize: "13px",
-                      border: "none",
-                      borderRadius: "8px",
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      transition: "background 0.15s ease",
-                    }}
-                    onMouseEnter={(e) => {
-                      if (r !== role) e.currentTarget.style.background = "#f8fafc";
-                    }}
-                    onMouseLeave={(e) => {
-                      if (r !== role) e.currentTarget.style.background = "transparent";
-                    }}
-                  >
-                    <span>{r}</span>
-                    {r === role && (
-                      <span style={{ color: "#e91e77", fontWeight: "700" }}>✓</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Employee ID (Only for Faculty & System Administrator) */}
-          {isEmployee && (
-            <div style={{ marginBottom: "18px" }}>
-              <label
-                style={{
-                  display: "block",
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  color: "#334155",
-                  letterSpacing: "0.6px",
-                  textTransform: "uppercase",
-                  marginBottom: "6px",
-                }}
-              >
-                Employee ID
-              </label>
-              <div style={{ position: "relative" }}>
-                <div
-                  style={{
-                    position: "absolute",
-                    left: "14px",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    color: "#94a3b8",
-                    display: "flex",
-                    alignItems: "center",
-                    pointerEvents: "none",
-                  }}
-                >
-                  <svg
-                    width="17"
-                    height="17"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <rect x="3" y="4" width="18" height="16" rx="2" />
-                    <circle cx="9" cy="10" r="2" />
-                    <line x1="15" y1="8" x2="17" y2="8" />
-                    <line x1="15" y1="12" x2="17" y2="12" />
-                    <line x1="7" y1="16" x2="17" y2="16" />
-                  </svg>
-                </div>
-                <input
-                  type="text"
-                  required
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  placeholder="e.g. FAC-2026-042"
-                  style={{
-                    width: "100%",
-                    height: "46px",
-                    padding: "0 14px 0 42px",
-                    background: "#f8fafc",
-                    border: "1.5px solid #cbd5e1",
-                    borderRadius: "14px",
-                    fontSize: "13.5px",
-                    color: "#0f172a",
-                    outline: "none",
-                    transition: "all 0.2s ease",
-                  }}
-                  onFocus={(e) => (e.target.style.borderColor = "#e91e77")}
-                  onBlur={(e) => (e.target.style.borderColor = "#cbd5e1")}
-                />
-              </div>
+              {displayedError}
             </div>
           )}
 
           {/* Email Field */}
           <div style={{ marginBottom: "18px" }}>
             <label
+              htmlFor="login-email"
               style={{
                 display: "block",
                 fontSize: "11px",
@@ -371,11 +210,18 @@ export default function Login({ onLogin = () => {} }) {
                 </svg>
               </div>
               <input
+                id="login-email"
                 type="email"
                 required
+                autoComplete="email"
+                disabled={isSubmitting}
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="student@ceu.edu.ph"
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (localError) setLocalError("");
+                  if (authError) onClearError();
+                }}
+                placeholder="name@ceu.edu.ph"
                 style={{
                   width: "100%",
                   height: "46px",
@@ -397,6 +243,7 @@ export default function Login({ onLogin = () => {} }) {
           {/* Password Field */}
           <div style={{ marginBottom: "22px" }}>
             <label
+              htmlFor="login-password"
               style={{
                 display: "block",
                 fontSize: "11px",
@@ -437,10 +284,17 @@ export default function Login({ onLogin = () => {} }) {
                 </svg>
               </div>
               <input
+                id="login-password"
                 type="password"
                 required
+                autoComplete="current-password"
+                disabled={isSubmitting}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (localError) setLocalError("");
+                  if (authError) onClearError();
+                }}
                 placeholder="••••••••"
                 style={{
                   width: "100%",
@@ -463,6 +317,7 @@ export default function Login({ onLogin = () => {} }) {
           {/* Submit Sign In Button */}
           <button
             type="submit"
+            disabled={isSubmitting}
             style={{
               width: "100%",
               height: "48px",
@@ -472,7 +327,8 @@ export default function Login({ onLogin = () => {} }) {
               borderRadius: "14px",
               fontSize: "15px",
               fontWeight: "700",
-              cursor: "pointer",
+              cursor: isSubmitting ? "not-allowed" : "pointer",
+              opacity: isSubmitting ? 0.75 : 1,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -481,29 +337,33 @@ export default function Login({ onLogin = () => {} }) {
               transition: "transform 0.15s ease, box-shadow 0.15s ease",
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.transform = "translateY(-1px)";
-              e.currentTarget.style.boxShadow = "0 8px 20px rgba(233, 30, 119, 0.42)";
+              if (!isSubmitting) {
+                e.currentTarget.style.transform = "translateY(-1px)";
+                e.currentTarget.style.boxShadow = "0 8px 20px rgba(233, 30, 119, 0.42)";
+              }
             }}
             onMouseLeave={(e) => {
               e.currentTarget.style.transform = "translateY(0)";
               e.currentTarget.style.boxShadow = "0 6px 16px rgba(233, 30, 119, 0.35)";
             }}
           >
-            <span>Sign In</span>
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
-              <polyline points="10 17 15 12 10 7" />
-              <line x1="15" y1="12" x2="3" y2="12" />
-            </svg>
+            <span>{isSubmitting ? "Signing In..." : "Sign In"}</span>
+            {!isSubmitting && (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                <polyline points="10 17 15 12 10 7" />
+                <line x1="15" y1="12" x2="3" y2="12" />
+              </svg>
+            )}
           </button>
 
           {/* Protected Portal Footer */}

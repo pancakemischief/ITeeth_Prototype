@@ -27,6 +27,23 @@ export function isUuid(str) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(str));
 }
 
+function sanitizeSupabaseError(error, fallback = "Unable to sync with cloud database.") {
+  const raw = typeof error === "string" ? error : error?.message || "";
+  const lower = raw.toLowerCase();
+  if (
+    !raw ||
+    lower.includes("row-level security") ||
+    lower.includes("rls") ||
+    lower.includes("policy") ||
+    lower.includes("permission denied") ||
+    lower.includes("jwt") ||
+    lower.includes("postgres")
+  ) {
+    return fallback;
+  }
+  return raw;
+}
+
 export const DEFAULT_CLINICIAN = "Dr. Jane Doe, MD";
 
 // LocalStorage Cache Keys for resilient offline/local persistence
@@ -575,7 +592,11 @@ export async function fetchPatientsFromSupabase() {
 
     if (error) {
       console.warn("[Supabase] fetchPatients error:", error.message);
-      return { success: false, error: error.message, data: getLocalPatients() };
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Using cached patient records."),
+        data: getLocalPatients(),
+      };
     }
 
     if (Array.isArray(data) && data.length > 0) {
@@ -596,7 +617,11 @@ export async function fetchPatientsFromSupabase() {
     return { success: true, error: null, data: cached };
   } catch (err) {
     console.warn("[Supabase] Unexpected error fetching patients:", err);
-    return { success: false, error: err.message, data: getLocalPatients() };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Using cached patient records."),
+      data: getLocalPatients(),
+    };
   }
 }
 
@@ -613,7 +638,11 @@ export async function fetchPendingFromSupabase() {
 
     if (error) {
       console.warn("[Supabase] fetchPending error:", error.message);
-      return { success: false, error: error.message, data: getLocalPending() };
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Using cached submissions."),
+        data: getLocalPending(),
+      };
     }
 
     if (Array.isArray(data) && data.length > 0) {
@@ -629,7 +658,11 @@ export async function fetchPendingFromSupabase() {
     return { success: true, error: null, data: getLocalPending() };
   } catch (err) {
     console.warn("[Supabase] Unexpected error fetching pending:", err);
-    return { success: false, error: err.message, data: getLocalPending() };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Using cached submissions."),
+      data: getLocalPending(),
+    };
   }
 }
 
@@ -713,7 +746,11 @@ export async function savePatientToSupabase(patient) {
 
       if (error) {
         console.warn("[Supabase] savePatient upsert error:", error.message);
-        return { success: false, error: error.message, data: formattedPatient };
+        return {
+          success: false,
+          error: sanitizeSupabaseError(error, "Saved locally."),
+          data: formattedPatient,
+        };
       }
       return { success: true, data: data?.[0] ? normalizePatient(data[0]) : formattedPatient };
     } else {
@@ -732,7 +769,11 @@ export async function savePatientToSupabase(patient) {
           .select();
         if (error) {
           console.warn("[Supabase] update existing patient error:", error.message);
-          return { success: false, error: error.message, data: formattedPatient };
+          return {
+            success: false,
+            error: sanitizeSupabaseError(error, "Saved locally."),
+            data: formattedPatient,
+          };
         }
         return { success: true, data: data?.[0] ? normalizePatient(data[0]) : formattedPatient };
       } else {
@@ -742,14 +783,22 @@ export async function savePatientToSupabase(patient) {
           .select();
         if (error) {
           console.warn("[Supabase] insert patient error:", error.message);
-          return { success: false, error: error.message, data: formattedPatient };
+          return {
+            success: false,
+            error: sanitizeSupabaseError(error, "Saved locally."),
+            data: formattedPatient,
+          };
         }
         return { success: true, data: data?.[0] ? normalizePatient(data[0]) : formattedPatient };
       }
     }
   } catch (err) {
     console.warn("[Supabase] Unexpected error saving patient:", err);
-    return { success: false, error: err.message, data: formattedPatient };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Saved locally."),
+      data: formattedPatient,
+    };
   }
 }
 
@@ -912,7 +961,11 @@ export async function savePendingToSupabase(item) {
 
     if (error) {
       console.warn("[Supabase] savePending error:", error.message);
-      return { success: false, error: error.message, data: formattedPending };
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Persisted in local cache."),
+        data: formattedPending,
+      };
     }
 
     return {
@@ -922,7 +975,11 @@ export async function savePendingToSupabase(item) {
     };
   } catch (err) {
     console.warn("[Supabase] Unexpected error saving pending approval:", err);
-    return { success: false, error: err.message, data: formattedPending };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Persisted in local cache."),
+      data: formattedPending,
+    };
   }
 }
 
@@ -1037,12 +1094,18 @@ export async function declinePendingInSupabase(item) {
 
     if (error) {
       console.warn("[Supabase] declinePending error:", error.message);
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Updated locally."),
+      };
     }
     return { success: true };
   } catch (err) {
     console.warn("[Supabase] Unexpected error declining pending item:", err);
-    return { success: false, error: err.message };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Updated locally."),
+    };
   }
 }
 
@@ -1521,10 +1584,18 @@ export async function testSupabaseConnection() {
   try {
     const { error } = await supabase.from("patients").select("id").limit(1);
     if (error) {
-      return { connected: true, tableFound: false, error: error.message };
+      return {
+        connected: true,
+        tableFound: false,
+        error: sanitizeSupabaseError(error, "Database connection requires an active authorized session."),
+      };
     }
     return { connected: true, tableFound: true, error: null };
   } catch (err) {
-    return { connected: false, tableFound: false, error: err.message };
+    return {
+      connected: false,
+      tableFound: false,
+      error: sanitizeSupabaseError(err, "Unable to reach Supabase service."),
+    };
   }
 }

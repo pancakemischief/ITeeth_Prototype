@@ -2,14 +2,12 @@ import { useState, useEffect } from "react";
 import Layout from "./Layout";
 import { testSupabaseConnection } from "../lib/dentalService";
 import { normalizeRole, canAccessDeveloperOptions } from "../lib/roleUtils";
-import supabaseRlsSql from "../lib/supabaseRls.sql?raw";
 
 const MOCK_AUDIT_LOGS = [
   { id: "LOG-9941", action: "ODF_SUBMIT", user: "student@ceu.edu.ph", target: "Patient #10000005", time: "10 mins ago", status: "Success" },
   { id: "LOG-9940", action: "FACULTY_APPROVE", user: "faculty@ceu.edu.ph", target: "ODF #10000001", time: "25 mins ago", status: "Success" },
   { id: "LOG-9939", action: "PATIENT_RECORD_VIEW", user: "student@ceu.edu.ph", target: "Patient #10000002", time: "1 hour ago", status: "Authorized" },
-  { id: "LOG-9938", action: "RLS_EVAL_CHECK", user: "System Guard", target: "public.patients", time: "2 hours ago", status: "Enforced" },
-  { id: "LOG-9937", action: "AUTH_ROLE_ASSIGN", user: "admin@ceu.edu.ph", target: "User DEN-2026-081", time: "3 hours ago", status: "Updated" },
+  { id: "LOG-9937", action: "AUTH_PROFILE_VERIFY", user: "System Auth", target: "Active Session", time: "3 hours ago", status: "Verified" },
 ];
 
 export default function Settings({
@@ -18,10 +16,10 @@ export default function Settings({
   onRefreshFromSupabase = () => {},
   currentUser,
   onSignOut,
-  onSwitchRole = () => {},
 }) {
-  const normRole = normalizeRole(currentUser?.role);
+  const normRole = normalizeRole(currentUser);
   const isAdmin = canAccessDeveloperOptions(normRole);
+  const canSeedSupabase = import.meta.env.DEV && currentUser?.role === "System Admin";
 
   const sections = ["Account"];
   if (isAdmin) {
@@ -31,8 +29,6 @@ export default function Settings({
 
   const [section, setSection] = useState(isAdmin ? "Developer Options" : "Account");
   const [dbStatus, setDbStatus] = useState({ checking: true, connected: false, error: null });
-  const [copied, setCopied] = useState(false);
-  const [showRoleModal, setShowRoleModal] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -50,12 +46,6 @@ export default function Settings({
       mounted = false;
     };
   }, []);
-
-  const copySql = () => {
-    navigator.clipboard.writeText(supabaseRlsSql);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
 
   return (
     <Layout
@@ -153,27 +143,9 @@ export default function Settings({
                     Developer & System Administrator Options
                   </h2>
                   <p style={{ margin: "3px 0 0", fontSize: "12.5px", color: "#64748b" }}>
-                    Audit logs, live role assignment switcher, and Supabase RLS diagnostics
+                    System audit logs and platform diagnostics
                   </p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowRoleModal(true)}
-                  style={{
-                    background: "linear-gradient(135deg, #0284c7 0%, #0369a1 100%)",
-                    color: "#ffffff",
-                    border: "none",
-                    borderRadius: "12px",
-                    padding: "8px 16px",
-                    fontSize: "12.5px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                    boxShadow: "0 4px 12px rgba(2, 132, 199, 0.3)",
-                  }}
-                >
-                  ⚡ Role Assignment Switcher
-                </button>
               </div>
 
               {/* System Diagnostics Panel */}
@@ -187,8 +159,8 @@ export default function Settings({
                     <div style={{ color: "#059669", fontWeight: "700" }}>● Healthy & Online</div>
                   </div>
                   <div style={{ background: "#fff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
-                    <div style={{ color: "#64748b", fontSize: "11px" }}>RLS Policy Engine</div>
-                    <div style={{ color: "#0284c7", fontWeight: "700" }}>● Active (4 Roles Mapped)</div>
+                    <div style={{ color: "#64748b", fontSize: "11px" }}>Session Authentication</div>
+                    <div style={{ color: "#0284c7", fontWeight: "700" }}>● Supabase Auth Active</div>
                   </div>
                   <div style={{ background: "#fff", padding: "10px 12px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
                     <div style={{ color: "#64748b", fontSize: "11px" }}>Patient ID Validation</div>
@@ -238,41 +210,27 @@ export default function Settings({
                 </div>
               </div>
 
-              {/* Database Actions */}
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  onClick={copySql}
-                  style={{
-                    background: copied ? "#059669" : "#ffffff",
-                    color: copied ? "#ffffff" : "#0f172a",
-                    border: "1.5px solid #cbd5e1",
-                    padding: "9px 16px",
-                    borderRadius: "12px",
-                    fontSize: "12.5px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                  }}
-                >
-                  {copied ? "✓ RLS Script Copied!" : "📋 Copy Supabase RLS Script"}
-                </button>
-                <button
-                  type="button"
-                  onClick={onSeedSupabase}
-                  style={{
-                    background: "#0f172a",
-                    color: "#ffffff",
-                    border: "none",
-                    padding: "9px 16px",
-                    borderRadius: "12px",
-                    fontSize: "12.5px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                  }}
-                >
-                  ↑ Seed 8-Digit Patient Data
-                </button>
-              </div>
+              {/* Development-Only Database Seed Action */}
+              {canSeedSupabase && (
+                <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={onSeedSupabase}
+                    style={{
+                      background: "#0f172a",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "9px 16px",
+                      borderRadius: "12px",
+                      fontSize: "12.5px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ↑ Seed Supabase
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -293,14 +251,14 @@ export default function Settings({
                     fontSize: "20px",
                   }}
                 >
-                  {currentUser?.email ? currentUser.email.charAt(0).toUpperCase() : "U"}
+                  {(currentUser?.name || currentUser?.email || "U").charAt(0).toUpperCase()}
                 </div>
                 <div>
                   <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
-                    {currentUser?.role || "Student Clinician"}
+                    {currentUser?.name || currentUser?.role || "Authenticated User"}
                   </h2>
                   <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
-                    {currentUser?.email || "student@ceu.edu.ph"}
+                    {currentUser?.email || ""}
                   </p>
                 </div>
               </div>
@@ -352,7 +310,7 @@ export default function Settings({
                     cursor: "pointer",
                   }}
                 >
-                  Switch Account / Sign Out
+                  Sign Out
                 </button>
               </div>
             </div>
@@ -376,18 +334,19 @@ export default function Settings({
                 }}
               >
                 <div style={{ marginBottom: "6px" }}>
-                  <strong>Project Endpoint:</strong>{" "}
-                  <code style={{ background: "#fff", padding: "2px 6px", borderRadius: "6px", border: "1px solid #cbd5e1" }}>
-                    https://mnsqgpiupgelkkmknyex.supabase.co
-                  </code>
+                  <strong>Service Provider:</strong> Supabase PostgreSQL
                 </div>
                 <div>
                   <strong>Live Status:</strong>{" "}
                   {dbStatus.checking ? (
                     <span style={{ color: "#d97706", fontWeight: "600" }}>● Checking connection...</span>
-                  ) : dbStatus.connected ? (
+                  ) : dbStatus.connected && dbStatus.tableFound ? (
                     <span style={{ color: "#059669", fontWeight: "700" }}>
                       ● Connected & Synchronized with Supabase
+                    </span>
+                  ) : dbStatus.connected ? (
+                    <span style={{ color: "#d97706", fontWeight: "700" }}>
+                      ● {dbStatus.error || "Limited sync availability"}
                     </span>
                   ) : (
                     <span style={{ color: "#dc2626", fontWeight: "700" }}>● Error: {dbStatus.error}</span>
@@ -414,39 +373,24 @@ export default function Settings({
                   ↻ Fetch from Supabase
                 </button>
 
-                <button
-                  type="button"
-                  onClick={onSeedSupabase}
-                  style={{
-                    background: "#0f172a",
-                    color: "#fff",
-                    border: 0,
-                    padding: "9px 16px",
-                    borderRadius: "12px",
-                    fontSize: "13px",
-                    fontWeight: "700",
-                    cursor: "pointer",
-                  }}
-                >
-                  ↑ Seed Sample Data
-                </button>
-
-                <button
-                  type="button"
-                  onClick={copySql}
-                  style={{
-                    background: copied ? "#059669" : "#ffffff",
-                    color: copied ? "#ffffff" : "#334155",
-                    border: "1.5px solid #cbd5e1",
-                    padding: "9px 16px",
-                    borderRadius: "12px",
-                    fontSize: "13px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                  }}
-                >
-                  {copied ? "✓ Schema Copied!" : "Copy SQL Schema"}
-                </button>
+                {canSeedSupabase && (
+                  <button
+                    type="button"
+                    onClick={onSeedSupabase}
+                    style={{
+                      background: "#0f172a",
+                      color: "#fff",
+                      border: 0,
+                      padding: "9px 16px",
+                      borderRadius: "12px",
+                      fontSize: "13px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ↑ Seed Supabase
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -454,7 +398,7 @@ export default function Settings({
           {section === "Security" && (
             <div>
               <h2 style={{ margin: "0 0 14px", fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
-                Security & Row Level Security (RLS)
+                Access Control & Permissions
               </h2>
               <div
                 style={{
@@ -466,10 +410,9 @@ export default function Settings({
                   lineHeight: "1.7",
                 }}
               >
-                <div><strong>Patient Role:</strong> Restrained to <code>patient_id == auth.uid()</code></div>
-                <div><strong>Student Clinician:</strong> Restricted to attended patients & own records</div>
-                <div><strong>Faculty:</strong> Unrestricted patient view & ODF approval rights</div>
-                <div><strong>Administrator:</strong> System audit logs & configuration management</div>
+                <div><strong>Student Clinician:</strong> Attended patients, ODF submissions, and status tracking</div>
+                <div><strong>Faculty:</strong> Full patient records access, ODF review, approval, and record management</div>
+                <div><strong>System Admin:</strong> Full clinical management, audit logs, and system configuration</div>
               </div>
             </div>
           )}
@@ -522,129 +465,12 @@ export default function Settings({
               >
                 <div><strong>Applet:</strong> I-Teeth Dental Patient Management System</div>
                 <div><strong>Runtime:</strong> React 19 + Vite 8 SPA</div>
-                <div><strong>Database:</strong> Supabase PostgreSQL (PostgREST API)</div>
+                <div><strong>Database:</strong> Supabase PostgreSQL</div>
               </div>
             </div>
           )}
         </section>
       </div>
-
-      {/* Role Assignment Modal (Admin Exclusive) */}
-      {showRoleModal && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            backgroundColor: "rgba(15, 23, 42, 0.55)",
-            backdropFilter: "blur(4px)",
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "16px",
-          }}
-          onClick={() => setShowRoleModal(false)}
-        >
-          <div
-            style={{
-              width: "100%",
-              maxWidth: "440px",
-              background: "#ffffff",
-              borderRadius: "24px",
-              boxShadow: "0 24px 48px -12px rgba(0, 0, 0, 0.25)",
-              overflow: "hidden",
-              border: "1px solid #e2e8f0",
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                background: "linear-gradient(135deg, #0284c7 0%, #0369a1 100%)",
-                padding: "20px 24px",
-                color: "#ffffff",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800" }}>
-                Developer Role Switcher
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowRoleModal(false)}
-                style={{
-                  background: "rgba(255, 255, 255, 0.2)",
-                  border: "none",
-                  borderRadius: "50%",
-                  width: "30px",
-                  height: "30px",
-                  color: "#fff",
-                  fontSize: "14px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ padding: "20px 24px" }}>
-              <p style={{ margin: "0 0 16px", fontSize: "13px", color: "#475569" }}>
-                Select a user role to instantly simulate its exact permission boundaries, conditional components, and views:
-              </p>
-
-              <div style={{ display: "grid", gap: "8px", marginBottom: "20px" }}>
-                {[
-                  { key: "Student Clinician", desc: "Attended patients only, ODF upload modal" },
-                  { key: "Dentistry Department Faculty", desc: "All patients, ODF review, approve/reject" },
-                  { key: "System Administrator", desc: "Full faculty access + Developer options" },
-                  { key: "Patient", desc: "Strictly own health record (John Doe)" },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => {
-                      onSwitchRole(item.key);
-                      setShowRoleModal(false);
-                    }}
-                    style={{
-                      padding: "12px 14px",
-                      borderRadius: "12px",
-                      border: currentUser?.role === item.key ? "2px solid #0284c7" : "1.5px solid #e2e8f0",
-                      background: currentUser?.role === item.key ? "#f0f9ff" : "#ffffff",
-                      textAlign: "left",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div style={{ fontWeight: "700", fontSize: "13.5px", color: "#0f172a" }}>{item.key}</div>
-                    <div style={{ fontSize: "11.5px", color: "#64748b" }}>{item.desc}</div>
-                  </button>
-                ))}
-              </div>
-
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  type="button"
-                  onClick={() => setShowRoleModal(false)}
-                  style={{
-                    background: "#f1f5f9",
-                    color: "#475569",
-                    border: "none",
-                    padding: "9px 18px",
-                    borderRadius: "12px",
-                    fontSize: "13px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </Layout>
   );
 }

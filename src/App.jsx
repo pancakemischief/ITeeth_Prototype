@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import Login from "./components/Login";
 import PatientRecord from "./components/PatientRecord";
@@ -8,6 +8,7 @@ import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal"
 import OralDiagnosisForm from "./components/OralDiagnosisForm";
 import DocumentViewerModal from "./components/DocumentViewerModal";
 import { canApproveODF, canDeleteRecords } from "./lib/roleUtils";
+import { supabase } from "./lib/supabaseClient";
 import {
   fetchPatientsFromSupabase,
   fetchPendingFromSupabase,
@@ -22,6 +23,22 @@ import {
   getLocalPatients,
   getLocalPending,
 } from "./lib/dentalService";
+
+function mapProfileRoleToDisplay(dbRole) {
+  switch (String(dbRole || "").toLowerCase().trim()) {
+    case "student_clinician":
+      return "Student Clinician";
+    case "faculty":
+      return "Faculty";
+    case "system_admin":
+    case "admin":
+      return "System Admin";
+    case "patient":
+      return "Patient";
+    default:
+      return null;
+  }
+}
 
 function toIsoDateInput(val) {
   if (!val) return "";
@@ -144,15 +161,11 @@ function buildOdfInitialDataFromRecord(patient, record) {
 function AppRoutes() {
   const navigate = useNavigate();
 
-  // Authentication State
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = sessionStorage.getItem("iteeth_user");
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  // Supabase Authentication & Profile State
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const authReqSeqRef = useRef(0);
 
   const [patients, setPatients] = useState(() => getLocalPatients());
   const [pending, setPending] = useState(() => getLocalPending());
@@ -164,15 +177,155 @@ function AppRoutes() {
   const [notification, setNotification] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
-  const showToast = (message) => {
+  const showToast = useCallback((message) => {
     setNotification(message);
     setTimeout(() => {
       setNotification((current) => (current === message ? null : current));
     }, 4500);
-  };
+  }, []);
 
-  // Load from Supabase on mount
+  // Resolve active Supabase session + server-side public.profiles row
   useEffect(() => {
+    let mounted = true;
+
+    const resolveSessionAndProfile = async (session, { isSignInEvent = false } = {}) => {
+      const reqId = ++authReqSeqRef.current;
+
+      if (!session?.user?.id) {
+        if (!mounted || reqId !== authReqSeqRef.current) return;
+        setCurrentUser(null);
+        setAuthLoading(false);
+        return;
+      }
+
+      try {
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("id, email, full_name, employee_id, role, status")
+          .eq("id", session.user.id)
+          .single();
+
+        if (!mounted || reqId !== authReqSeqRef.current) return;
+
+        const normalizedRole = mapProfileRoleToDisplay(profile?.role);
+
+        if (profileError || !profile || profile.status !== "approved" || !normalizedRole) {
+          const accessDeniedMessage =
+            profile?.status === "pending"
+              ? "Your account is pending approval by an administrator."
+              : profile?.status && profile.status !== "approved"
+              ? "Access denied. Your account has not been approved."
+              : "Unable to verify your user profile. Please contact an administrator.";
+
+          setCurrentUser(null);
+          setAuthError(accessDeniedMessage);
+          setAuthLoading(false);
+          await supabase.auth.signOut();
+          return;
+        }
+
+        const normalizedUser = {
+          id: profile.id,
+          email: profile.email || session.user.email || "",
+          name: profile.full_name || "",
+          employeeId: profile.employee_id || null,
+          role: normalizedRole,
+        };
+
+        setCurrentUser(normalizedUser);
+        setAuthError("");
+        setAuthLoading(false);
+
+        if (isSignInEvent) {
+          showToast(`✓ Welcome, ${normalizedUser.name || normalizedUser.role}`);
+        }
+      } catch {
+        if (!mounted || reqId !== authReqSeqRef.current) return;
+        setCurrentUser(null);
+        setAuthError("Unable to verify your session profile. Please sign in again.");
+        setAuthLoading(false);
+        await supabase.auth.signOut();
+      }
+    };
+
+    // Initial session resolution
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!mounted) return;
+        if (error) {
+          setCurrentUser(null);
+          setAuthLoading(false);
+          return;
+        }
+        resolveSessionAndProfile(data?.session || null);
+      })
+      .catch(() => {
+        if (mounted) {
+          setCurrentUser(null);
+          setAuthLoading(false);
+        }
+      });
+
+    // Subscribe to auth state changes
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+      if (event === "SIGNED_OUT" || !session) {
+        authReqSeqRef.current += 1;
+        setCurrentUser(null);
+        setAuthLoading(false);
+        return;
+      }
+      resolveSessionAndProfile(session, { isSignInEvent: event === "SIGNED_IN" });
+    });
+
+    return () => {
+      mounted = false;
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [showToast]);
+
+  const refreshFromSupabase = useCallback(
+    async (showNotice = true) => {
+      setIsSyncing(true);
+      try {
+        const [patientsRes, pendingRes] = await Promise.all([
+          fetchPatientsFromSupabase(),
+          fetchPendingFromSupabase(),
+        ]);
+
+        let loadedCount = 0;
+        if (patientsRes.data && patientsRes.data.length > 0) {
+          setPatients(patientsRes.data);
+          loadedCount += patientsRes.data.length;
+        }
+
+        if (pendingRes.data && pendingRes.data.length > 0) {
+          setPending(pendingRes.data);
+          loadedCount += pendingRes.data.length;
+        }
+
+        if (showNotice) {
+          if (patientsRes.success && loadedCount > 0) {
+            showToast(`✓ Synchronized ${loadedCount} patient records with Supabase`);
+          } else if (!patientsRes.success) {
+            showToast("⚡ Using cached patient records (cloud sync unavailable)");
+          } else {
+            showToast(`✓ Synced with Supabase (${loadedCount} records)`);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed fetching from Supabase:", err);
+      } finally {
+        setIsSyncing(false);
+      }
+    },
+    [showToast]
+  );
+
+  // Load clinical records from Supabase whenever an authenticated user is resolved
+  useEffect(() => {
+    if (!currentUser?.id) return;
     let active = true;
     (async () => {
       try {
@@ -194,77 +347,13 @@ function AppRoutes() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [currentUser?.id]);
 
-  const refreshFromSupabase = useCallback(async (showNotice = true) => {
-    setIsSyncing(true);
-    try {
-      const [patientsRes, pendingRes] = await Promise.all([
-        fetchPatientsFromSupabase(),
-        fetchPendingFromSupabase(),
-      ]);
-
-      let loadedCount = 0;
-      if (patientsRes.data && patientsRes.data.length > 0) {
-        setPatients(patientsRes.data);
-        loadedCount += patientsRes.data.length;
-      }
-
-      if (pendingRes.data && pendingRes.data.length > 0) {
-        setPending(pendingRes.data);
-        loadedCount += pendingRes.data.length;
-      }
-
-      if (showNotice) {
-        if (patientsRes.success && loadedCount > 0) {
-          showToast(`✓ Synchronized ${loadedCount} patient records with Supabase`);
-        } else if (!patientsRes.success) {
-          showToast(`⚡ Using cached records (${patientsRes.error || "Supabase RLS active"})`);
-        } else {
-          showToast(`✓ Synced with Supabase (${loadedCount} records)`);
-        }
-      }
-    } catch (err) {
-      console.warn("Failed fetching from Supabase:", err);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, []);
-
-  const handleLogin = (user) => {
-    setCurrentUser(user);
-    try {
-      sessionStorage.setItem("iteeth_user", JSON.stringify(user));
-    } catch {
-      // ignore
-    }
-    showToast(`✓ Welcome, ${user.role} (${user.email})`);
-    navigate("/patients");
-  };
-
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    setAuthError("");
+    await supabase.auth.signOut();
     setCurrentUser(null);
-    try {
-      sessionStorage.removeItem("iteeth_user");
-    } catch {
-      // ignore
-    }
-    navigate("/login");
-  };
-
-  const handleSwitchRole = (newRole) => {
-    const updated = {
-      ...currentUser,
-      role: newRole,
-      employeeId: newRole.includes("Faculty") ? "FAC-2026-081" : newRole.includes("Admin") ? "ADM-2026-001" : null,
-    };
-    setCurrentUser(updated);
-    try {
-      sessionStorage.setItem("iteeth_user", JSON.stringify(updated));
-    } catch {
-      // ignore
-    }
-    showToast(`Role switched to: ${newRole}`);
+    navigate("/login", { replace: true });
   };
 
   const handleNavigate = (key) => {
@@ -285,7 +374,7 @@ function AppRoutes() {
 
   // Delete selected history records for a patient (Faculty & System Admin only)
   const handleDeleteSelectedRecords = async (patient, recordsToDelete = []) => {
-    if (!canDeleteRecords(currentUser?.role)) {
+    if (!canDeleteRecords(currentUser)) {
       showToast("❌ Permission Denied: Only Dentistry Department Faculty and System Administrators can delete records.");
       return { success: false };
     }
@@ -318,7 +407,7 @@ function AppRoutes() {
 
   // Delete an entire patient record + history (Faculty & System Admin only)
   const handleDeletePatient = async (patient) => {
-    if (!canDeleteRecords(currentUser?.role)) {
+    if (!canDeleteRecords(currentUser)) {
       showToast("❌ Permission Denied: Only Dentistry Department Faculty and System Administrators can delete patient records.");
       return { success: false };
     }
@@ -434,13 +523,13 @@ function AppRoutes() {
     if (res.success) {
       showToast(`✓ ODF #${formattedId} saved & added to patient record history!`);
     } else {
-      showToast(`✓ ODF #${formattedId} saved to patient record history (${res.error || "persisted in local cache"})`);
+      showToast(`✓ ODF #${formattedId} saved to local patient record history`);
     }
   };
 
   // Approve a pending request
   const handleApprove = async (item) => {
-    if (!canApproveODF(currentUser?.role)) {
+    if (!canApproveODF(currentUser)) {
       showToast("❌ Permission Denied: Student Clinicians cannot approve ODF submissions. Only Faculty and System Administrators can approve.");
       return;
     }
@@ -489,13 +578,13 @@ function AppRoutes() {
       }
       showToast(`✓ Successfully approved & added to #${formattedId} record history!`);
     } else {
-      showToast(`✓ Approved & saved to patient history (${res.error || "persisted locally"})`);
+      showToast("✓ Approved & saved to local patient record history");
     }
   };
 
   // Decline a pending request
   const handleDecline = async (item) => {
-    if (!canApproveODF(currentUser?.role)) {
+    if (!canApproveODF(currentUser)) {
       showToast("❌ Permission Denied: Student Clinicians cannot decline ODF submissions.");
       return;
     }
@@ -519,8 +608,11 @@ function AppRoutes() {
     }
   };
 
-  // Seed sample records into Supabase
+  // Seed sample records into Supabase (restricted strictly to System Admins in development mode)
   const handleSeedSupabase = async () => {
+    if (!import.meta.env.DEV || currentUser?.role !== "System Admin") {
+      return;
+    }
     showToast("Seeding 8-digit sample data to Supabase...");
     let savedPatients = 0;
     let savedPending = 0;
@@ -538,13 +630,53 @@ function AppRoutes() {
     if (savedPatients > 0 || savedPending > 0) {
       showToast(`✓ Seeded ${savedPatients} patients and ${savedPending} pending requests!`);
     } else {
-      showToast("⚡ Tables protected by RLS. Apply RLS script from Settings in Supabase SQL editor.");
+      showToast("Unable to seed sample data to Supabase right now.");
     }
   };
 
-  // Protected route wrapper
+  // Wait for initial session + profile resolution before rendering protected views or redirecting to /login
+  if (authLoading) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#ffbfd7",
+          fontFamily: '"Plus Jakarta Sans", system-ui, -apple-system, sans-serif',
+          padding: "20px",
+        }}
+      >
+        <div
+          style={{
+            background: "#ffffff",
+            borderRadius: "20px",
+            padding: "26px 32px",
+            boxShadow: "0 20px 45px -10px rgba(0, 0, 0, 0.12)",
+            textAlign: "center",
+            color: "#0f172a",
+            fontWeight: "700",
+            fontSize: "14px",
+          }}
+        >
+          Verifying session...
+        </div>
+      </div>
+    );
+  }
+
+  // Unauthenticated routes
   if (!currentUser) {
-    return <Login onLogin={handleLogin} />;
+    return (
+      <Routes>
+        <Route
+          path="/login"
+          element={<Login authError={authError} onClearError={() => setAuthError("")} />}
+        />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
   }
 
   return (
@@ -575,7 +707,7 @@ function AppRoutes() {
       )}
 
       <Routes>
-        <Route path="/login" element={<Login onLogin={handleLogin} />} />
+        <Route path="/login" element={<Navigate to="/patients" replace />} />
         <Route path="/" element={<Navigate to="/patients" replace />} />
         <Route
           path="/patients"
@@ -620,7 +752,6 @@ function AppRoutes() {
               onRefreshFromSupabase={() => refreshFromSupabase(true)}
               currentUser={currentUser}
               onSignOut={handleSignOut}
-              onSwitchRole={handleSwitchRole}
             />
           }
         />
@@ -651,7 +782,7 @@ function AppRoutes() {
           readOnly={true}
           isSubmissionView={viewRecordTarget.source === "submission"}
           onViewUploadedScans={
-            viewRecordTarget.pendingItem && canApproveODF(currentUser?.role)
+            viewRecordTarget.pendingItem && canApproveODF(currentUser)
               ? () => setReviewDocModalTarget(viewRecordTarget.pendingItem)
               : null
           }
@@ -690,7 +821,7 @@ function AppRoutes() {
 
       {/* Faculty Review Modal for Pending Approvals */}
       {activeReviewModal && (() => {
-        const allowApprove = canApproveODF(currentUser?.role);
+        const allowApprove = canApproveODF(currentUser);
         return (
           <div
             style={{

@@ -2,57 +2,68 @@
  * Role helper utilities for I-Teeth
  */
 
-export function normalizeRole(role) {
-  if (!role) return "student_clinician";
-  const r = String(role).toLowerCase();
-  if (r.includes("admin")) return "admin";
-  if (r.includes("faculty")) return "faculty";
-  if (r.includes("patient")) return "patient";
-  if (r.includes("student") || r.includes("clinician")) return "student_clinician";
-  return "student_clinician";
+function extractRoleValue(userOrRole) {
+  if (userOrRole && typeof userOrRole === "object") {
+    return userOrRole.role;
+  }
+  return userOrRole;
 }
 
-export function getRoleTitle(role) {
-  const norm = normalizeRole(role);
+export function normalizeRole(userOrRole) {
+  const role = extractRoleValue(userOrRole);
+  if (!role) return "";
+  const r = String(role).toLowerCase().trim();
+  if (r === "system_admin" || r === "admin" || r.includes("admin")) return "admin";
+  if (r === "faculty" || r.includes("faculty")) return "faculty";
+  if (r === "patient" || r.includes("patient")) return "patient";
+  if (r === "student_clinician" || r.includes("student") || r.includes("clinician")) {
+    return "student_clinician";
+  }
+  return "";
+}
+
+export function getRoleTitle(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   switch (norm) {
     case "admin":
-      return "System Administrator";
+      return "System Admin";
     case "faculty":
-      return "Dentistry Department Faculty";
+      return "Faculty";
     case "patient":
       return "Patient";
     case "student_clinician":
-    default:
       return "Student Clinician";
+    default:
+      return "";
   }
 }
 
-export function canUploadODF(role) {
-  const norm = normalizeRole(role);
+export function canUploadODF(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   return norm === "student_clinician" || norm === "faculty" || norm === "admin";
 }
 
-export function canApproveODF(role) {
-  const norm = normalizeRole(role);
+export function canApproveODF(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   return norm === "faculty" || norm === "admin";
 }
 
-export function isStudentClinician(role) {
-  const norm = normalizeRole(role);
+export function isStudentClinician(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   return norm === "student_clinician";
 }
 
-export function canAccessDeveloperOptions(role) {
-  const norm = normalizeRole(role);
+export function canAccessDeveloperOptions(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   return norm === "admin";
 }
 
-export function canViewPendingApprovals(role) {
-  const norm = normalizeRole(role);
-  return norm !== "patient";
+export function canViewPendingApprovals(userOrRole) {
+  const norm = normalizeRole(userOrRole);
+  return Boolean(norm) && norm !== "patient";
 }
 
-export function canDeleteRecords(role) {
-  const norm = normalizeRole(role);
+export function canDeleteRecords(userOrRole) {
+  const norm = normalizeRole(userOrRole);
   return norm === "faculty" || norm === "admin";
 }
