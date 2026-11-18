@@ -46,12 +46,7 @@ function sanitizeSupabaseError(error, fallback = "Unable to sync with cloud data
 
 export const DEFAULT_CLINICIAN = "Dr. Jane Doe, MD";
 
-// LocalStorage Cache Keys for resilient offline/local persistence
-const CACHE_PATIENTS_KEY = "iteeth_patients_v2";
-const CACHE_PENDING_KEY = "iteeth_pending_v2";
-const CACHE_RECORDS_KEY = "iteeth_records_v2";
-const CACHE_DELETED_PATIENTS_KEY = "iteeth_deleted_patients_v2";
-const CACHE_DELETED_RECORDS_KEY = "iteeth_deleted_records_v2";
+const PHI_STORAGE_PREFIX = "iteeth_";
 
 /**
  * Normalizes a person's name into comparable tokens, handling both
@@ -339,165 +334,94 @@ export const DEFAULT_PENDING = [
   },
 ];
 
-// In-memory / LocalStorage cache helpers
-let inMemoryPatients = [...DEFAULT_PATIENTS];
-let inMemoryPending = [...DEFAULT_PENDING];
+// Ephemeral in-memory state (never persisted to localStorage/sessionStorage)
+let inMemoryPatients = [];
+let inMemoryPending = [];
 let inMemoryRecords = [];
 let inMemoryDeletedPatientIds = [];
 let inMemoryDeletedRecordIds = [];
 
-export function getDeletedPatientIds() {
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = localStorage.getItem(CACHE_DELETED_PATIENTS_KEY);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          inMemoryDeletedPatientIds = parsed;
-          return parsed;
-        }
+function removeKeysByPrefix(storage, prefix) {
+  if (!storage) return;
+  try {
+    const keysToRemove = [];
+    for (let i = 0; i < storage.length; i += 1) {
+      const key = storage.key(i);
+      if (key && key.startsWith(prefix)) {
+        keysToRemove.push(key);
       }
-    } catch {
-      // ignore
     }
+    keysToRemove.forEach((key) => storage.removeItem(key));
+  } catch {
+    // ignore storage access errors
   }
+}
+
+/**
+ * Clears all in-memory PHI caches and purges any `iteeth_*` keys from browser storage.
+ */
+export function clearAllLocalPhi() {
+  inMemoryPatients = [];
+  inMemoryPending = [];
+  inMemoryRecords = [];
+  inMemoryDeletedPatientIds = [];
+  inMemoryDeletedRecordIds = [];
+
+  if (typeof localStorage !== "undefined") {
+    removeKeysByPrefix(localStorage, PHI_STORAGE_PREFIX);
+  }
+  if (typeof sessionStorage !== "undefined") {
+    removeKeysByPrefix(sessionStorage, PHI_STORAGE_PREFIX);
+  }
+}
+
+export function getDeletedPatientIds() {
   return inMemoryDeletedPatientIds;
 }
 
 function addDeletedPatientIds(ids = []) {
   const next = Array.from(new Set([...getDeletedPatientIds(), ...ids.map((id) => to8DigitId(id))]));
   inMemoryDeletedPatientIds = next;
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_DELETED_PATIENTS_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
-  }
   return next;
 }
 
 export function getDeletedRecordIds() {
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = localStorage.getItem(CACHE_DELETED_RECORDS_KEY);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          inMemoryDeletedRecordIds = parsed;
-          return parsed;
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
   return inMemoryDeletedRecordIds;
 }
 
 function addDeletedRecordIds(ids = []) {
   const next = Array.from(new Set([...getDeletedRecordIds(), ...ids.filter(Boolean).map(String)]));
   inMemoryDeletedRecordIds = next;
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_DELETED_RECORDS_KEY, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
-  }
   return next;
 }
 
 export function getLocalPatients() {
   const deletedSet = new Set(getDeletedPatientIds());
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = localStorage.getItem(CACHE_PATIENTS_KEY);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          return parsed.filter((p) => !deletedSet.has(to8DigitId(p?.eightDigitId || p?.id)));
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }
   return inMemoryPatients.filter((p) => !deletedSet.has(to8DigitId(p?.eightDigitId || p?.id)));
 }
 
 export function saveLocalPatients(patients) {
-  inMemoryPatients = patients;
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_PATIENTS_KEY, JSON.stringify(patients));
-    } catch {
-      // ignore
-    }
-  }
+  inMemoryPatients = Array.isArray(patients) ? patients : [];
 }
 
 export function getLocalPending() {
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = localStorage.getItem(CACHE_PENDING_KEY);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {
-      // ignore
-    }
-  }
   return inMemoryPending;
 }
 
 export function saveLocalPending(pending) {
-  inMemoryPending = pending;
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_PENDING_KEY, JSON.stringify(pending));
-    } catch {
-      // ignore
-    }
-  }
+  inMemoryPending = Array.isArray(pending) ? pending : [];
 }
 
 export function getLocalRecords() {
-  if (typeof localStorage !== "undefined") {
-    try {
-      const raw = localStorage.getItem(CACHE_RECORDS_KEY);
-      if (raw !== null) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch {
-      // ignore
-    }
-  }
   return inMemoryRecords;
 }
 
 export function saveLocalRecord(record) {
   inMemoryRecords = [record, ...getLocalRecords().filter((r) => r.id !== record.id)];
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(inMemoryRecords));
-    } catch {
-      // ignore
-    }
-  }
 }
 
 function saveLocalRecordsList(records) {
-  inMemoryRecords = records;
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(records));
-    } catch {
-      // ignore
-    }
-  }
+  inMemoryRecords = Array.isArray(records) ? records : [];
 }
 
 /**
@@ -596,8 +520,8 @@ export async function fetchPatientsFromSupabase() {
       console.warn("[Supabase] fetchPatients error:", error.message);
       return {
         success: false,
-        error: sanitizeSupabaseError(error, "Using cached patient records."),
-        data: getLocalPatients(),
+        error: sanitizeSupabaseError(error, "Unable to fetch patient records."),
+        data: [],
       };
     }
 
@@ -610,8 +534,8 @@ export async function fetchPatientsFromSupabase() {
     console.warn("[Supabase] Unexpected error fetching patients:", err);
     return {
       success: false,
-      error: sanitizeSupabaseError(err, "Using cached patient records."),
-      data: getLocalPatients(),
+      error: sanitizeSupabaseError(err, "Unable to fetch patient records."),
+      data: [],
     };
   }
 }
@@ -631,8 +555,8 @@ export async function fetchPendingFromSupabase() {
       console.warn("[Supabase] fetchPending error:", error.message);
       return {
         success: false,
-        error: sanitizeSupabaseError(error, "Using cached submissions."),
-        data: getLocalPending(),
+        error: sanitizeSupabaseError(error, "Unable to fetch pending submissions."),
+        data: [],
       };
     }
 
@@ -645,8 +569,8 @@ export async function fetchPendingFromSupabase() {
     console.warn("[Supabase] Unexpected error fetching pending:", err);
     return {
       success: false,
-      error: sanitizeSupabaseError(err, "Using cached submissions."),
-      data: getLocalPending(),
+      error: sanitizeSupabaseError(err, "Unable to fetch pending submissions."),
+      data: [],
     };
   }
 }
@@ -787,46 +711,102 @@ export async function savePatientToSupabase(patient) {
   }
 }
 
+function getSanitizedFileExtension(fileOrBlob, fileName = "") {
+  const nameMatch = String(fileName || "").match(/\.([a-zA-Z0-9]+)$/);
+  if (nameMatch?.[1]) {
+    const sanitized = nameMatch[1].toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (sanitized) return sanitized;
+  }
+  const mime = String(fileOrBlob?.type || "").toLowerCase();
+  if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
+  if (mime.includes("pdf")) return "pdf";
+  return "jpg";
+}
+
 /**
- * Upload cropped or scanned ODF image to Supabase Storage bucket 'odf-scans'
+ * Upload cropped or scanned ODF image to private Supabase Storage bucket 'odf-scans'
+ * using an unguessable UUID object path. Returns the storage object path on success, or null on failure.
  */
 export async function uploadOdfImageToStorage(fileOrBlob, fileName) {
   if (!fileOrBlob) return null;
   try {
-    const cleanFileName = `${Date.now()}_${fileName.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+    const uuid =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+    const ext = getSanitizedFileExtension(fileOrBlob, fileName);
+    const cleanFileName = `${uuid}.${ext}`;
+
     const { error } = await supabase.storage
       .from("odf-scans")
       .upload(cleanFileName, fileOrBlob, {
         cacheControl: "3600",
-        upsert: true,
+        upsert: false,
       });
 
     if (error) {
-      console.warn("[Supabase Storage] Notice:", error.message);
-      if (fileOrBlob instanceof Blob) {
-        return new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onloadend = () => resolve(reader.result);
-          reader.readAsDataURL(fileOrBlob);
-        });
-      }
+      console.warn("[Supabase Storage] Upload failed:", error.message);
       return null;
     }
 
-    const { data: publicUrlData } = supabase.storage
-      .from("odf-scans")
-      .getPublicUrl(cleanFileName);
-
-    return publicUrlData?.publicUrl || cleanFileName;
+    return cleanFileName;
   } catch (err) {
     console.warn("[Supabase Storage] Unexpected upload error:", err);
-    if (fileOrBlob instanceof Blob) {
-      return new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result);
-        reader.readAsDataURL(fileOrBlob);
-      });
+    return null;
+  }
+}
+
+/**
+ * Resolves an ODF scan path or legacy storage URL into a short-lived signed URL.
+ */
+export async function resolveOdfScanSignedUrl(pathOrUrl, expiresInSeconds = 300) {
+  if (!pathOrUrl || typeof pathOrUrl !== "string") return null;
+  const trimmed = pathOrUrl.trim();
+  if (!trimmed) return null;
+
+  if (
+    trimmed.startsWith("data:") ||
+    trimmed.startsWith("blob:") ||
+    trimmed.startsWith("/assets/")
+  ) {
+    return trimmed;
+  }
+
+  let objectPath = trimmed;
+  const publicMarker = "/storage/v1/object/public/odf-scans/";
+  const signMarker = "/storage/v1/object/sign/odf-scans/";
+
+  if (trimmed.includes(publicMarker)) {
+    objectPath = trimmed.split(publicMarker)[1].split("?")[0];
+  } else if (trimmed.includes(signMarker)) {
+    objectPath = trimmed.split(signMarker)[1].split("?")[0];
+  } else if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  } else {
+    objectPath = trimmed.split("?")[0].replace(/^\/+/, "");
+  }
+
+  if (!objectPath) return null;
+
+  try {
+    objectPath = decodeURIComponent(objectPath);
+  } catch {
+    // keep raw objectPath if malformed URI encoding
+  }
+
+  try {
+    const { data, error } = await supabase.storage
+      .from("odf-scans")
+      .createSignedUrl(objectPath, expiresInSeconds);
+
+    if (error) {
+      console.warn("[Supabase Storage] Failed to create signed URL:", error.message);
+      return null;
     }
+    return data?.signedUrl || null;
+  } catch (err) {
+    console.warn("[Supabase Storage] Unexpected signed URL error:", err);
     return null;
   }
 }
@@ -1539,13 +1519,7 @@ export async function updateRecordDocumentScan({ recordId, patientId, type, url 
     }
     return r;
   });
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.setItem(CACHE_RECORDS_KEY, JSON.stringify(updatedRecs));
-    } catch {
-      // ignore
-    }
-  }
+  saveLocalRecordsList(updatedRecs);
 
   // Also update patient in local storage
   const localPatients = getLocalPatients();

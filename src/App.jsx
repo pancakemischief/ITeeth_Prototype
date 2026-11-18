@@ -20,8 +20,10 @@ import {
   deleteEntirePatient,
   to8DigitId,
   DEFAULT_CLINICIAN,
-  getLocalPatients,
-  getLocalPending,
+  DEFAULT_PATIENTS,
+  DEFAULT_PENDING,
+  clearAllLocalPhi,
+  resolveOdfScanSignedUrl,
 } from "./lib/dentalService";
 
 function mapProfileRoleToDisplay(dbRole) {
@@ -167,13 +169,14 @@ function AppRoutes() {
   const [authError, setAuthError] = useState("");
   const authReqSeqRef = useRef(0);
 
-  const [patients, setPatients] = useState(() => getLocalPatients());
-  const [pending, setPending] = useState(() => getLocalPending());
+  const [patients, setPatients] = useState([]);
+  const [pending, setPending] = useState([]);
   const [historyTarget, setHistoryTarget] = useState(null); // { patient, initialRecord }
   const [viewRecordTarget, setViewRecordTarget] = useState(null); // { patient, record } -> Full 2-page ODF view
   const [odfModalTarget, setOdfModalTarget] = useState(null); // patient object to open ODF for
   const [activeReviewModal, setActiveReviewModal] = useState(null); // pending item to review
   const [reviewDocModalTarget, setReviewDocModalTarget] = useState(null); // item to inspect document scan for
+  const [resolvedReviewScan, setResolvedReviewScan] = useState({ path: null, url: null });
   const [notification, setNotification] = useState(null);
   const [isSyncing, setIsSyncing] = useState(false);
 
@@ -182,6 +185,18 @@ function AppRoutes() {
     setTimeout(() => {
       setNotification((current) => (current === message ? null : current));
     }, 4500);
+  }, []);
+
+  const clearSessionPhiState = useCallback(() => {
+    clearAllLocalPhi();
+    setPatients([]);
+    setPending([]);
+    setHistoryTarget(null);
+    setViewRecordTarget(null);
+    setOdfModalTarget(null);
+    setActiveReviewModal(null);
+    setReviewDocModalTarget(null);
+    setResolvedReviewScan({ path: null, url: null });
   }, []);
 
   // Resolve active Supabase session + server-side public.profiles row
@@ -193,6 +208,7 @@ function AppRoutes() {
 
       if (!session?.user?.id) {
         if (!mounted || reqId !== authReqSeqRef.current) return;
+        clearSessionPhiState();
         setCurrentUser(null);
         setAuthLoading(false);
         return;
@@ -217,6 +233,7 @@ function AppRoutes() {
               ? "Access denied. Your account has not been approved."
               : "Unable to verify your user profile. Please contact an administrator.";
 
+          clearSessionPhiState();
           setCurrentUser(null);
           setAuthError(accessDeniedMessage);
           setAuthLoading(false);
@@ -241,6 +258,7 @@ function AppRoutes() {
         }
       } catch {
         if (!mounted || reqId !== authReqSeqRef.current) return;
+        clearSessionPhiState();
         setCurrentUser(null);
         setAuthError("Unable to verify your session profile. Please sign in again.");
         setAuthLoading(false);
@@ -254,6 +272,7 @@ function AppRoutes() {
       .then(({ data, error }) => {
         if (!mounted) return;
         if (error) {
+          clearSessionPhiState();
           setCurrentUser(null);
           setAuthLoading(false);
           return;
@@ -262,6 +281,7 @@ function AppRoutes() {
       })
       .catch(() => {
         if (mounted) {
+          clearSessionPhiState();
           setCurrentUser(null);
           setAuthLoading(false);
         }
@@ -272,8 +292,12 @@ function AppRoutes() {
       if (!mounted) return;
       if (event === "SIGNED_OUT" || !session) {
         authReqSeqRef.current += 1;
+        clearSessionPhiState();
         setCurrentUser(null);
         setAuthLoading(false);
+        if (event !== "SIGNED_OUT") {
+          supabase.auth.signOut().catch(() => {});
+        }
         return;
       }
       resolveSessionAndProfile(session, { isSignInEvent: event === "SIGNED_IN" });
@@ -283,7 +307,72 @@ function AppRoutes() {
       mounted = false;
       authListener?.subscription?.unsubscribe();
     };
-  }, [showToast]);
+  }, [showToast, clearSessionPhiState]);
+
+  // Automatic 15-minute inactivity timeout while authenticated
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const IDLE_TIMEOUT_MS = 900000;
+    let idleTimerId = null;
+
+    const handleIdleSignOut = async () => {
+      clearSessionPhiState();
+      setCurrentUser(null);
+      setAuthError("Session expired due to inactivity. Please sign in again.");
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // ignore signOut errors during idle expiration
+      }
+      navigate("/login", { replace: true });
+    };
+
+    const resetIdleTimer = () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      idleTimerId = setTimeout(handleIdleSignOut, IDLE_TIMEOUT_MS);
+    };
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    activityEvents.forEach((evt) => {
+      window.addEventListener(evt, resetIdleTimer, { passive: true });
+    });
+    resetIdleTimer();
+
+    return () => {
+      if (idleTimerId) clearTimeout(idleTimerId);
+      activityEvents.forEach((evt) => {
+        window.removeEventListener(evt, resetIdleTimer);
+      });
+    };
+  }, [currentUser?.id, clearSessionPhiState, navigate]);
+
+  const activeReviewOdontogramPath =
+    activeReviewModal?.odontogramCropUrl ||
+    activeReviewModal?.odfDetails?.odontogramCropUrl ||
+    null;
+
+  // Resolve short-lived signed URL for review modal odontogram thumbnail
+  useEffect(() => {
+    if (!activeReviewOdontogramPath) return;
+
+    let active = true;
+    resolveOdfScanSignedUrl(activeReviewOdontogramPath).then((signedUrl) => {
+      if (active) setResolvedReviewScan({ path: activeReviewOdontogramPath, url: signedUrl });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [activeReviewOdontogramPath]);
+
+  const isResolvingReviewScan = Boolean(
+    activeReviewOdontogramPath && resolvedReviewScan.path !== activeReviewOdontogramPath
+  );
+  const reviewOdontogramSignedUrl =
+    activeReviewOdontogramPath && resolvedReviewScan.path === activeReviewOdontogramPath
+      ? resolvedReviewScan.url
+      : null;
 
   const refreshFromSupabase = useCallback(
     async (showNotice = true) => {
@@ -353,6 +442,7 @@ function AppRoutes() {
 
   const handleSignOut = async () => {
     setAuthError("");
+    clearSessionPhiState();
     await supabase.auth.signOut();
     setCurrentUser(null);
     navigate("/login", { replace: true });
@@ -595,18 +685,21 @@ function AppRoutes() {
     showToast("Seeding 8-digit sample data to Supabase...");
     let savedPatients = 0;
     let savedPending = 0;
+    const seedPatients = patients.length > 0 ? patients : DEFAULT_PATIENTS;
+    const seedPending = pending.length > 0 ? pending : DEFAULT_PENDING;
 
-    for (const p of patients) {
+    for (const p of seedPatients) {
       const res = await savePatientToSupabase(p);
       if (res.success) savedPatients++;
     }
 
-    for (const pend of pending) {
+    for (const pend of seedPending) {
       const res = await savePendingToSupabase(pend);
       if (res.success) savedPending++;
     }
 
     if (savedPatients > 0 || savedPending > 0) {
+      await refreshFromSupabase(false);
       showToast(`✓ Seeded ${savedPatients} patients and ${savedPending} pending requests!`);
     } else {
       showToast("Unable to seed sample data to Supabase right now.");
@@ -931,11 +1024,21 @@ function AppRoutes() {
                       <span style={{ fontSize: "11px", fontWeight: "700", color: "#e91e77", display: "block", marginBottom: "4px" }}>
                         Attached Odontogram Scan:
                       </span>
-                      <img
-                        src={activeReviewModal.odontogramCropUrl || activeReviewModal.odfDetails?.odontogramCropUrl}
-                        alt="Odontogram preview"
-                        style={{ maxHeight: "140px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                      />
+                      {isResolvingReviewScan ? (
+                        <div style={{ fontSize: "12px", color: "#64748b", padding: "12px" }}>
+                          Loading secure odontogram preview...
+                        </div>
+                      ) : reviewOdontogramSignedUrl ? (
+                        <img
+                          src={reviewOdontogramSignedUrl}
+                          alt="Odontogram preview"
+                          style={{ maxHeight: "140px", maxWidth: "100%", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: "12px", color: "#94a3b8", padding: "12px" }}>
+                          Unable to load odontogram preview.
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

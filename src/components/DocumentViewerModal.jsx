@@ -1,6 +1,6 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { generateCeuOdfPage1Svg, generateCeuOdfPage2Svg, svgToDataUri } from "../lib/ceuFormRenderer";
-import { uploadOdfImageToStorage, to8DigitId } from "../lib/dentalService";
+import { uploadOdfImageToStorage, resolveOdfScanSignedUrl, to8DigitId } from "../lib/dentalService";
 
 export default function DocumentViewerModal({
   record,
@@ -13,6 +13,9 @@ export default function DocumentViewerModal({
   const [rotation, setRotation] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState("");
+  const [uploadedOverrides, setUploadedOverrides] = useState({});
+  const [resolvedPage1, setResolvedPage1] = useState({ path: null, url: null });
+  const [resolvedPage2, setResolvedPage2] = useState({ path: null, url: null });
   const fileInputRef = useRef(null);
 
   const eightDigitId = to8DigitId(patient?.id || patient?.eightDigitId || record?.patientId || record?.id);
@@ -39,9 +42,10 @@ export default function DocumentViewerModal({
     examDate: record?.date || record?.visitDate || odfDetails?.date || patient?.lastVisit || "10/01/2026",
   };
 
-  // Resolve image URLs:
-  // 1. If user uploaded a physical photo for Page 1, use it. Otherwise use the authentic CEU SVG.
+  // Resolve image paths/URLs via short-lived signed URLs:
+  // 1. If user uploaded a physical photo for Page 1, resolve signed URL; otherwise use authentic CEU SVG.
   const customPage1Image =
+    uploadedOverrides.page1 ||
     record?.rawScanUrl ||
     record?.page1ScanUrl ||
     odfDetails?.rawScanUrl ||
@@ -50,11 +54,9 @@ export default function DocumentViewerModal({
     patient?.latestOdfScanUrl ||
     null;
 
-  const defaultPage1Image = svgToDataUri(generateCeuOdfPage1Svg(docData));
-  const page1Image = customPage1Image || defaultPage1Image;
-
   // 2. Page 2 image
   const customPage2Image =
+    uploadedOverrides.page2 ||
     record?.rawScanPage2Url ||
     record?.page2ScanUrl ||
     odfDetails?.rawScanPage2Url ||
@@ -63,17 +65,56 @@ export default function DocumentViewerModal({
     patient?.latestOdfPage2Url ||
     null;
 
+  useEffect(() => {
+    if (!customPage1Image) return;
+    let active = true;
+
+    resolveOdfScanSignedUrl(customPage1Image).then((signedUrl) => {
+      if (active) setResolvedPage1({ path: customPage1Image, url: signedUrl });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [customPage1Image]);
+
+  useEffect(() => {
+    if (!customPage2Image) return;
+    let active = true;
+
+    resolveOdfScanSignedUrl(customPage2Image).then((signedUrl) => {
+      if (active) setResolvedPage2({ path: customPage2Image, url: signedUrl });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [customPage2Image]);
+
+  const resolvingPage1 = Boolean(customPage1Image && resolvedPage1.path !== customPage1Image);
+  const resolvedPage1Url =
+    customPage1Image && resolvedPage1.path === customPage1Image ? resolvedPage1.url : null;
+
+  const resolvingPage2 = Boolean(customPage2Image && resolvedPage2.path !== customPage2Image);
+  const resolvedPage2Url =
+    customPage2Image && resolvedPage2.path === customPage2Image ? resolvedPage2.url : null;
+
+  const defaultPage1Image = svgToDataUri(generateCeuOdfPage1Svg(docData));
+  const page1Image = resolvedPage1Url || defaultPage1Image;
+
   const defaultPage2Image = svgToDataUri(generateCeuOdfPage2Svg(docData));
-  const page2Image = customPage2Image || defaultPage2Image;
+  const page2Image = resolvedPage2Url || defaultPage2Image;
 
   // Active image to display
   let currentImageSrc = page1Image;
-  let isCustomUpload = !!customPage1Image;
+  let isCustomUpload = Boolean(resolvedPage1Url);
+  let isResolvingCurrent = resolvingPage1;
   let currentTitle = "Oral Diagnosis Form & Odontogram (Page 1)";
 
   if (activeTab === "page2") {
     currentImageSrc = page2Image;
-    isCustomUpload = !!customPage2Image;
+    isCustomUpload = Boolean(resolvedPage2Url);
+    isResolvingCurrent = resolvingPage2;
     currentTitle = "Diagnostic Tests, Treatment Plan & Consent Form (Page 2)";
   }
 
@@ -90,15 +131,23 @@ export default function DocumentViewerModal({
     setUploadMessage("Uploading document scan to Supabase storage...");
 
     try {
-      const fileName = `doc_${activeTab}_${eightDigitId}_${Date.now()}.jpg`;
-      const uploadedUrl = await uploadOdfImageToStorage(file, fileName);
+      const ext = file.type === "application/pdf" ? "pdf" : "jpg";
+      const fileName = `doc_${activeTab}.${ext}`;
+      const uploadedPath = await uploadOdfImageToStorage(file, fileName);
+
+      if (!uploadedPath) {
+        setUploadMessage("Upload error: Could not attach document.");
+        return;
+      }
+
+      setUploadedOverrides((prev) => ({ ...prev, [activeTab]: uploadedPath }));
 
       if (onSaveDocumentScan) {
         onSaveDocumentScan({
           recordId: record?.id,
           patientId: eightDigitId,
           type: activeTab,
-          url: uploadedUrl,
+          url: uploadedPath,
         });
       }
 
@@ -468,17 +517,36 @@ export default function DocumentViewerModal({
               maxWidth: "100%",
             }}
           >
-            <img
-              src={currentImageSrc}
-              alt={currentTitle}
-              style={{
-                display: "block",
-                maxWidth: "760px",
-                width: "100%",
-                height: "auto",
-                background: "#ffffff",
-              }}
-            />
+            {isResolvingCurrent ? (
+              <div
+                role="status"
+                style={{
+                  minWidth: "320px",
+                  minHeight: "260px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "32px",
+                  color: "#475569",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                }}
+              >
+                Loading secure document scan...
+              </div>
+            ) : (
+              <img
+                src={currentImageSrc}
+                alt={currentTitle}
+                style={{
+                  display: "block",
+                  maxWidth: "760px",
+                  width: "100%",
+                  height: "auto",
+                  background: "#ffffff",
+                }}
+              />
+            )}
           </div>
         </div>
 

@@ -1,9 +1,10 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { cropImageRegion, ODF_CROP_PRESETS } from "../lib/cropUtils";
 import {
   to8DigitId,
   DEFAULT_CLINICIAN,
   uploadOdfImageToStorage,
+  resolveOdfScanSignedUrl,
   findExistingPatientByName,
   generateNextPatientId,
   getLocalPatients,
@@ -270,6 +271,69 @@ export default function OralDiagnosisForm({
     };
   });
 
+  const hasAnyScan = Boolean(
+    form.rawScanUrl ||
+      form.rawScanPage2Url ||
+      form.odontogramCropUrl ||
+      form.consentCropUrl
+  );
+  const scanKey = JSON.stringify([
+    form.rawScanUrl || null,
+    form.rawScanPage2Url || null,
+    form.odontogramCropUrl || null,
+    form.consentCropUrl || null,
+  ]);
+  const [resolvedScansState, setResolvedScansState] = useState({
+    key: "",
+    rawScanUrl: null,
+    rawScanPage2Url: null,
+    odontogramCropUrl: null,
+    consentCropUrl: null,
+  });
+
+  useEffect(() => {
+    if (!hasAnyScan) return;
+    let active = true;
+
+    Promise.all([
+      resolveOdfScanSignedUrl(form.rawScanUrl),
+      resolveOdfScanSignedUrl(form.rawScanPage2Url),
+      resolveOdfScanSignedUrl(form.odontogramCropUrl),
+      resolveOdfScanSignedUrl(form.consentCropUrl),
+    ]).then(([rawScanUrl, rawScanPage2Url, odontogramCropUrl, consentCropUrl]) => {
+      if (!active) return;
+      setResolvedScansState({
+        key: scanKey,
+        rawScanUrl,
+        rawScanPage2Url,
+        odontogramCropUrl,
+        consentCropUrl,
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    hasAnyScan,
+    scanKey,
+    form.rawScanUrl,
+    form.rawScanPage2Url,
+    form.odontogramCropUrl,
+    form.consentCropUrl,
+  ]);
+
+  const isLoadingScans = Boolean(hasAnyScan && resolvedScansState.key !== scanKey);
+  const resolvedScans =
+    hasAnyScan && resolvedScansState.key === scanKey
+      ? resolvedScansState
+      : {
+          rawScanUrl: null,
+          rawScanPage2Url: null,
+          odontogramCropUrl: null,
+          consentCropUrl: null,
+        };
+
   const resolvePatientIdForName = (nameValue, currentId) => {
     const matched = findExistingPatientByName(nameValue, knownPatients);
     if (matched) {
@@ -448,10 +512,7 @@ export default function OralDiagnosisForm({
         blob = await res.blob();
       } else {
         const ext = fileOrUrl.type === "application/pdf" ? "pdf" : "jpg";
-        rawUrl = await uploadOdfImageToStorage(
-          fileOrUrl,
-          `page1_${form.eightDigitId}_${Date.now()}.${ext}`
-        );
+        rawUrl = await uploadOdfImageToStorage(fileOrUrl, `page1.${ext}`);
       }
 
       // 1. Region Cropping: Odontogram Block (Section C) when input is an image
@@ -460,7 +521,7 @@ export default function OralDiagnosisForm({
           const odontoCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_1_ODONTOGRAM);
           const odontoCropUrl = await uploadOdfImageToStorage(
             odontoCrop.blob,
-            `odonto_${form.eightDigitId}.jpg`
+            "odonto.jpg"
           );
 
           setForm((prev) => ({
@@ -567,10 +628,7 @@ export default function OralDiagnosisForm({
         blob = await res.blob();
       } else {
         const ext = fileOrUrl.type === "application/pdf" ? "pdf" : "jpg";
-        rawUrl = await uploadOdfImageToStorage(
-          fileOrUrl,
-          `page2_${form.eightDigitId}_${Date.now()}.${ext}`
-        );
+        rawUrl = await uploadOdfImageToStorage(fileOrUrl, `page2.${ext}`);
       }
 
       // 1. Region Cropping: Signed Consent & Data Privacy Statement when input is an image
@@ -579,7 +637,7 @@ export default function OralDiagnosisForm({
           const consentCrop = await cropImageRegion(blob, ODF_CROP_PRESETS.PAGE_2_CONSENT);
           const consentCropUrl = await uploadOdfImageToStorage(
             consentCrop.blob,
-            `consent_${form.eightDigitId}.jpg`
+            "consent.jpg"
           );
 
           setForm((prev) => ({
@@ -1740,13 +1798,15 @@ export default function OralDiagnosisForm({
                       <div className="ceu-cropped-banner">
                         <span>✓ High-Resolution Region Cropped from Scanned ODF Page 1</span>
                         <div className="ceu-cropped-actions">
-                          <button
-                            type="button"
-                            className="ceu-preview-zoom-btn"
-                            onClick={() => setExpandedImage(form.odontogramCropUrl)}
-                          >
-                            🔍 Zoom & Inspect
-                          </button>
+                          {resolvedScans.odontogramCropUrl && (
+                            <button
+                              type="button"
+                              className="ceu-preview-zoom-btn"
+                              onClick={() => setExpandedImage(resolvedScans.odontogramCropUrl)}
+                            >
+                              🔍 Zoom & Inspect
+                            </button>
+                          )}
                           {!readOnly && (
                             <button
                               type="button"
@@ -1759,11 +1819,22 @@ export default function OralDiagnosisForm({
                         </div>
                       </div>
                       <div className="ceu-cropped-image-wrapper">
-                        <img
-                          src={form.odontogramCropUrl}
-                          alt="Cropped CEU Mouth Examination Odontogram"
-                          className="ceu-cropped-odonto-img"
-                        />
+                        {isLoadingScans && !resolvedScans.odontogramCropUrl ? (
+                          <div className="ceu-ocr-status-bar" role="status">
+                            <span className="ceu-spinner" />
+                            <span>Loading secure odontogram scan...</span>
+                          </div>
+                        ) : resolvedScans.odontogramCropUrl ? (
+                          <img
+                            src={resolvedScans.odontogramCropUrl}
+                            alt="Cropped CEU Mouth Examination Odontogram"
+                            className="ceu-cropped-odonto-img"
+                          />
+                        ) : (
+                          <div className="ceu-uploaded-empty">
+                            <p>Unable to load scanned odontogram image.</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -2260,13 +2331,15 @@ export default function OralDiagnosisForm({
                       <div className="ceu-cropped-banner">
                         <span>✓ Signed Physical Consent Form Cropped from Page 2 Scan</span>
                         <div className="ceu-cropped-actions">
-                          <button
-                            type="button"
-                            className="ceu-preview-zoom-btn"
-                            onClick={() => setExpandedImage(form.consentCropUrl)}
-                          >
-                            🔍 Zoom & Inspect
-                          </button>
+                          {resolvedScans.consentCropUrl && (
+                            <button
+                              type="button"
+                              className="ceu-preview-zoom-btn"
+                              onClick={() => setExpandedImage(resolvedScans.consentCropUrl)}
+                            >
+                              🔍 Zoom & Inspect
+                            </button>
+                          )}
                           {!readOnly && (
                             <button
                               type="button"
@@ -2279,11 +2352,22 @@ export default function OralDiagnosisForm({
                         </div>
                       </div>
                       <div className="ceu-cropped-image-wrapper">
-                        <img
-                          src={form.consentCropUrl}
-                          alt="Cropped CEU Signed Dental Consent Form"
-                          className="ceu-cropped-consent-img"
-                        />
+                        {isLoadingScans && !resolvedScans.consentCropUrl ? (
+                          <div className="ceu-ocr-status-bar" role="status">
+                            <span className="ceu-spinner" />
+                            <span>Loading secure consent scan...</span>
+                          </div>
+                        ) : resolvedScans.consentCropUrl ? (
+                          <img
+                            src={resolvedScans.consentCropUrl}
+                            alt="Cropped CEU Signed Dental Consent Form"
+                            className="ceu-cropped-consent-img"
+                          />
+                        ) : (
+                          <div className="ceu-uploaded-empty">
+                            <p>Unable to load scanned consent image.</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -2443,11 +2527,11 @@ export default function OralDiagnosisForm({
                     <section className="ceu-uploaded-card">
                       <div className="ceu-uploaded-card__head">
                         <strong>Page 1: Oral Diagnosis Form &amp; Odontogram</strong>
-                        {form.rawScanUrl && (
+                        {resolvedScans.rawScanUrl && (
                           <button
                             type="button"
                             className="ceu-preview-zoom-btn"
-                            onClick={() => setExpandedImage(form.rawScanUrl)}
+                            onClick={() => setExpandedImage(resolvedScans.rawScanUrl)}
                           >
                             🔍 Zoom &amp; Inspect
                           </button>
@@ -2455,12 +2539,24 @@ export default function OralDiagnosisForm({
                       </div>
                       <div className="ceu-uploaded-card__body">
                         {form.rawScanUrl ? (
-                          <img
-                            src={form.rawScanUrl}
-                            alt="Uploaded ODF Page 1"
-                            className="ceu-uploaded-card__img"
-                            onClick={() => setExpandedImage(form.rawScanUrl)}
-                          />
+                          isLoadingScans && !resolvedScans.rawScanUrl ? (
+                            <div className="ceu-ocr-status-bar" role="status">
+                              <span className="ceu-spinner" />
+                              <span>Loading secure Page 1 scan...</span>
+                            </div>
+                          ) : resolvedScans.rawScanUrl ? (
+                            <img
+                              src={resolvedScans.rawScanUrl}
+                              alt="Uploaded ODF Page 1"
+                              className="ceu-uploaded-card__img"
+                              onClick={() => setExpandedImage(resolvedScans.rawScanUrl)}
+                            />
+                          ) : (
+                            <div className="ceu-uploaded-empty">
+                              <span>📄</span>
+                              <p>Unable to generate signed URL for Page 1 scan.</p>
+                            </div>
+                          )
                         ) : (
                           <div className="ceu-uploaded-empty">
                             <span>📄</span>
@@ -2482,11 +2578,11 @@ export default function OralDiagnosisForm({
                     <section className="ceu-uploaded-card">
                       <div className="ceu-uploaded-card__head">
                         <strong>Page 2: Diagnostic Tests, Plan &amp; Consent</strong>
-                        {form.rawScanPage2Url && (
+                        {resolvedScans.rawScanPage2Url && (
                           <button
                             type="button"
                             className="ceu-preview-zoom-btn"
-                            onClick={() => setExpandedImage(form.rawScanPage2Url)}
+                            onClick={() => setExpandedImage(resolvedScans.rawScanPage2Url)}
                           >
                             🔍 Zoom &amp; Inspect
                           </button>
@@ -2494,12 +2590,24 @@ export default function OralDiagnosisForm({
                       </div>
                       <div className="ceu-uploaded-card__body">
                         {form.rawScanPage2Url ? (
-                          <img
-                            src={form.rawScanPage2Url}
-                            alt="Uploaded ODF Page 2"
-                            className="ceu-uploaded-card__img"
-                            onClick={() => setExpandedImage(form.rawScanPage2Url)}
-                          />
+                          isLoadingScans && !resolvedScans.rawScanPage2Url ? (
+                            <div className="ceu-ocr-status-bar" role="status">
+                              <span className="ceu-spinner" />
+                              <span>Loading secure Page 2 scan...</span>
+                            </div>
+                          ) : resolvedScans.rawScanPage2Url ? (
+                            <img
+                              src={resolvedScans.rawScanPage2Url}
+                              alt="Uploaded ODF Page 2"
+                              className="ceu-uploaded-card__img"
+                              onClick={() => setExpandedImage(resolvedScans.rawScanPage2Url)}
+                            />
+                          ) : (
+                            <div className="ceu-uploaded-empty">
+                              <span>📄</span>
+                              <p>Unable to generate signed URL for Page 2 scan.</p>
+                            </div>
+                          )
                         ) : (
                           <div className="ceu-uploaded-empty">
                             <span>📄</span>
