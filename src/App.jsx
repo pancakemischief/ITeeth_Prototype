@@ -295,14 +295,16 @@ function AppRoutes() {
         ]);
 
         let loadedCount = 0;
-        if (patientsRes.data && patientsRes.data.length > 0) {
-          setPatients(patientsRes.data);
-          loadedCount += patientsRes.data.length;
+        if (patientsRes.success) {
+          const nextPatients = patientsRes.data || [];
+          setPatients(nextPatients);
+          loadedCount += nextPatients.length;
         }
 
-        if (pendingRes.data && pendingRes.data.length > 0) {
-          setPending(pendingRes.data);
-          loadedCount += pendingRes.data.length;
+        if (pendingRes.success) {
+          const nextPending = pendingRes.data || [];
+          setPending(nextPending);
+          loadedCount += nextPending.length;
         }
 
         if (showNotice) {
@@ -334,11 +336,11 @@ function AppRoutes() {
           fetchPendingFromSupabase(),
         ]);
         if (!active) return;
-        if (patientsRes.data && patientsRes.data.length > 0) {
-          setPatients(patientsRes.data);
+        if (patientsRes.success) {
+          setPatients(patientsRes.data || []);
         }
-        if (pendingRes.data && pendingRes.data.length > 0) {
-          setPending(pendingRes.data);
+        if (pendingRes.success) {
+          setPending(pendingRes.data || []);
         }
       } catch (err) {
         console.warn("Initial Supabase load error:", err);
@@ -381,13 +383,22 @@ function AppRoutes() {
     if (!patient || !recordsToDelete.length) return { success: false };
 
     const res = await deleteSelectedPatientRecords(patient, recordsToDelete);
+    if (!res?.success) {
+      showToast(`❌ ${res?.error || "Operation failed."}`);
+      return res || { success: false };
+    }
+
     const deletedSet = new Set(res.deletedIds || []);
     const numericId = to8DigitId(patient.id || patient.eightDigitId);
 
     setPending((prev) =>
       prev.filter((p) => {
         const subId = p.submissionId || `pending_${to8DigitId(p.eightDigitId || p.id)}_${p.visitDate || ""}`;
-        return !deletedSet.has(subId) && !deletedSet.has(p.submissionId);
+        return (
+          !deletedSet.has(subId) &&
+          !deletedSet.has(p.submissionId) &&
+          !(p.dbId != null && deletedSet.has(String(p.dbId)))
+        );
       })
     );
 
@@ -414,7 +425,11 @@ function AppRoutes() {
     if (!patient) return { success: false };
     const numericId = to8DigitId(patient.id || patient.eightDigitId);
 
-    await deleteEntirePatient(patient);
+    const res = await deleteEntirePatient(patient);
+    if (!res?.success) {
+      showToast(`❌ ${res?.error || "Operation failed."}`);
+      return res || { success: false };
+    }
 
     setPatients((prev) => prev.filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId));
     setPending((prev) => prev.filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId));
@@ -426,7 +441,7 @@ function AppRoutes() {
     }
 
     showToast(`✓ Deleted patient record #${numericId} (${patient.name}).`);
-    return { success: true };
+    return res;
   };
 
   // Open the actual submitted digital ODF record (rather than a summary content modal)
@@ -468,144 +483,108 @@ function AppRoutes() {
     });
   };
 
-  // Submit Oral Diagnosis Form (ODF) or pending approval
+  // Submit Oral Diagnosis Form (ODF) to pending approvals only (never alters master patients pre-approval)
   const handleUploadODF = async (odfItem) => {
     const formattedId = to8DigitId(odfItem.id || odfItem.eightDigitId);
-    const submissionId = odfItem.submissionId || `sub_${formattedId}_${Date.now()}`;
     const formattedPending = {
       ...odfItem,
       id: formattedId,
       eightDigitId: formattedId,
-      submissionId,
       clinician: odfItem.clinician || DEFAULT_CLINICIAN,
     };
 
-    // 1. Update pending state (match by submissionId so multiple submissions for same patient don't collide)
-    setPending((prev) => [
-      formattedPending,
-      ...prev.filter((p) => (p.submissionId || to8DigitId(p.id)) !== submissionId),
-    ]);
-
-    // 2. Update or register patient in patients table while preserving existing metadata/dbId
-    let savedPatientName = formattedPending.name || "Patient #" + formattedId;
-    setPatients((prev) => {
-      const existing = prev.find((p) => to8DigitId(p.id) === formattedId);
-      const patientEntry = {
-        ...(existing || {}),
-        id: formattedId,
-        eightDigitId: formattedId,
-        name: existing?.name || formattedPending.name || "Patient #" + formattedId,
-        lastVisit: formattedPending.visitDate || existing?.lastVisit || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-        clinician: formattedPending.clinician || existing?.clinician,
-        procedure: formattedPending.procedure || existing?.procedure || "Oral Diagnosis Form (ODF)",
-        notes: formattedPending.notes || existing?.notes || "",
-        phone: odfItem.odfDetails?.cellPhone || odfItem.cellPhone || existing?.phone || "",
-        email: odfItem.odfDetails?.email || odfItem.email || existing?.email || "",
-        gender: odfItem.odfDetails?.sex || odfItem.sex || existing?.gender || "Male",
-        dateOfBirth: odfItem.odfDetails?.birthDate || odfItem.birthDate || existing?.dateOfBirth || "",
-        age: odfItem.odfDetails?.age || odfItem.age || existing?.age || "",
-        homeAddress: odfItem.odfDetails?.homeAddress || odfItem.homeAddress || existing?.homeAddress || "",
-        odfData: {
-          ...(existing?.odfData || {}),
-          ...(odfItem.odfDetails || odfItem),
-        },
-      };
-      savedPatientName = patientEntry.name;
-      return [
-        patientEntry,
-        ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
-      ];
-    });
-
-    showToast(`Submitting ODF for Patient #${formattedId} (${savedPatientName})...`);
+    showToast(`Submitting ODF for Patient #${formattedId}...`);
 
     const res = await savePendingToSupabase(formattedPending);
-    if (res.success) {
-      showToast(`✓ ODF #${formattedId} saved & added to patient record history!`);
-    } else {
-      showToast(`✓ ODF #${formattedId} saved to local patient record history`);
+    if (!res?.success) {
+      showToast(`❌ ${res?.error || "Operation failed."}`);
+      return res || { success: false };
     }
+
+    const savedSubmission = res.data || formattedPending;
+    setPending((prev) => [
+      savedSubmission,
+      ...prev.filter(
+        (p) =>
+          String(p.submissionId || p.dbId || "") !==
+          String(savedSubmission.submissionId || savedSubmission.dbId || "")
+      ),
+    ]);
+
+    showToast(`✓ ODF #${formattedId} submitted for faculty approval!`);
+    return res;
   };
 
-  // Approve a pending request
+  // Approve a pending request via server-side RPC
   const handleApprove = async (item) => {
     if (!canApproveODF(currentUser)) {
       showToast("❌ Permission Denied: Student Clinicians cannot approve ODF submissions. Only Faculty and System Administrators can approve.");
-      return;
+      return { success: false };
     }
-    const formattedId = to8DigitId(item.id);
-    const targetSubId = item.submissionId;
+    const formattedId = to8DigitId(item.id || item.eightDigitId);
+    const targetDbId = item.dbId ? String(item.dbId) : null;
+    const targetSubId = item.submissionId ? String(item.submissionId) : null;
+
+    showToast(`Approving #${formattedId} (${item.name})...`);
+
+    const res = await approvePendingInSupabase(item);
+    if (!res?.success) {
+      showToast(`❌ ${res?.error || "Operation failed."}`);
+      return res || { success: false };
+    }
 
     setPending((prev) =>
       prev.filter((p) => {
-        if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+        if (targetDbId && p.dbId != null) return String(p.dbId) !== targetDbId;
+        if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
         return to8DigitId(p.id) !== formattedId;
       })
     );
 
-    setPatients((prev) => {
-      const existing = prev.find((p) => to8DigitId(p.id) === formattedId);
-      const approvedPatient = {
-        ...(existing || {}),
-        id: formattedId,
-        eightDigitId: formattedId,
-        name: existing?.name || item.name,
-        lastVisit: item.visitDate || existing?.lastVisit || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-        clinician: item.clinician || existing?.clinician || DEFAULT_CLINICIAN,
-        procedure: item.procedure || existing?.procedure,
-        notes: item.notes || existing?.notes,
-        odfData: {
-          ...(existing?.odfData || {}),
-          ...(item.odfDetails || {}),
-        },
-      };
-      return [
-        approvedPatient,
-        ...prev.filter((p) => to8DigitId(p.id) !== formattedId),
-      ];
-    });
+    if (res.data) {
+      setPatients((prev) => [
+        res.data,
+        ...prev.filter(
+          (p) =>
+            to8DigitId(p.eightDigitId || p.id) !== res.data.eightDigitId &&
+            p.id !== res.data.id
+        ),
+      ]);
+    }
 
     setActiveReviewModal(null);
-    showToast(`✓ Approved #${formattedId} (${item.name}). Syncing with Supabase...`);
-
-    const res = await approvePendingInSupabase(item);
-    if (res.success) {
-      if (res.data) {
-        setPatients((prev) => [
-          res.data,
-          ...prev.filter((p) => to8DigitId(p.id) !== formattedId && p.id !== res.data.id),
-        ]);
-      }
-      showToast(`✓ Successfully approved & added to #${formattedId} record history!`);
-    } else {
-      showToast("✓ Approved & saved to local patient record history");
-    }
+    showToast(`✓ Successfully approved & added to #${formattedId} record history!`);
+    return res;
   };
 
   // Decline a pending request
   const handleDecline = async (item) => {
     if (!canApproveODF(currentUser)) {
       showToast("❌ Permission Denied: Student Clinicians cannot decline ODF submissions.");
-      return;
+      return { success: false };
     }
-    const formattedId = to8DigitId(item.id);
-    const targetSubId = item.submissionId;
+    const formattedId = to8DigitId(item.id || item.eightDigitId);
+    const targetDbId = item.dbId ? String(item.dbId) : null;
+    const targetSubId = item.submissionId ? String(item.submissionId) : null;
+
+    showToast(`Declining #${formattedId} (${item.name})...`);
+
+    const res = await declinePendingInSupabase(item);
+    if (!res?.success) {
+      showToast(`❌ ${res?.error || "Operation failed."}`);
+      return res || { success: false };
+    }
 
     setPending((prev) =>
       prev.filter((p) => {
-        if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
+        if (targetDbId && p.dbId != null) return String(p.dbId) !== targetDbId;
+        if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
         return to8DigitId(p.id) !== formattedId;
       })
     );
     setActiveReviewModal(null);
-    showToast(`Declining #${formattedId} (${item.name})...`);
-
-    const res = await declinePendingInSupabase(item);
-    if (res.success) {
-      showToast(`✕ Declined request for #${formattedId} in Supabase.`);
-    } else {
-      showToast(`✕ Declined request.`);
-    }
+    showToast(`✓ Declined request for #${formattedId} in Supabase.`);
+    return res;
   };
 
   // Seed sample records into Supabase (restricted strictly to System Admins in development mode)

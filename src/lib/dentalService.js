@@ -560,6 +560,8 @@ function normalizePending(row, index = 1) {
   );
   return {
     id: eightDigitId,
+    dbId: row.id,
+    submissionId: String(row.id),
     eightDigitId,
     name: row.name || "Unknown Patient",
     visitDate: row.visit_date || "01/01/2026",
@@ -580,7 +582,7 @@ function normalizePending(row, index = 1) {
 }
 
 /**
- * Fetch patients from Supabase `patients` table, with transparent fallback & merge with local cache
+ * Fetch patients from Supabase `patients` table
  */
 export async function fetchPatientsFromSupabase() {
   const deletedSet = new Set(getDeletedPatientIds());
@@ -599,22 +601,11 @@ export async function fetchPatientsFromSupabase() {
       };
     }
 
-    if (Array.isArray(data) && data.length > 0) {
-      const normalized = data
-        .map((r, i) => normalizePatient(r, i + 1))
-        .filter((p) => !deletedSet.has(p.eightDigitId));
-      // Merge with any locally added patients that aren't yet in Supabase
-      const local = getLocalPatients();
-      const dbIds = new Set(normalized.map((p) => p.eightDigitId));
-      const missingLocal = local.filter((p) => !dbIds.has(p.eightDigitId));
-      const combined = [...normalized, ...missingLocal];
-      saveLocalPatients(combined);
-      return { success: true, error: null, data: combined };
-    }
-
-    // If Supabase table is currently empty, return cached/default patients
-    const cached = getLocalPatients();
-    return { success: true, error: null, data: cached };
+    const normalized = (Array.isArray(data) ? data : [])
+      .map((r, i) => normalizePatient(r, i + 1))
+      .filter((p) => !deletedSet.has(p.eightDigitId));
+    saveLocalPatients(normalized);
+    return { success: true, error: null, data: normalized };
   } catch (err) {
     console.warn("[Supabase] Unexpected error fetching patients:", err);
     return {
@@ -645,17 +636,11 @@ export async function fetchPendingFromSupabase() {
       };
     }
 
-    if (Array.isArray(data) && data.length > 0) {
-      const normalized = data.map((r, i) => normalizePending(r, i + 1));
-      const local = getLocalPending();
-      const dbIds = new Set(normalized.map((p) => p.id));
-      const missingLocal = local.filter((p) => !dbIds.has(p.id));
-      const combined = [...normalized, ...missingLocal];
-      saveLocalPending(combined);
-      return { success: true, error: null, data: combined };
-    }
-
-    return { success: true, error: null, data: getLocalPending() };
+    const normalized = (Array.isArray(data) ? data : []).map((r, i) =>
+      normalizePending(r, i + 1)
+    );
+    saveLocalPending(normalized);
+    return { success: true, error: null, data: normalized };
   } catch (err) {
     console.warn("[Supabase] Unexpected error fetching pending:", err);
     return {
@@ -853,7 +838,6 @@ export async function uploadOdfImageToStorage(fileOrBlob, fileName) {
  */
 export async function savePendingToSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
-  const submissionId = item.submissionId || `sub_${numericId}_${Date.now()}`;
 
   // Preserve image crops inside odf_details
   const odfDetails = {
@@ -863,210 +847,145 @@ export async function savePendingToSupabase(item) {
     eightDigitId: numericId,
   };
 
-  const formattedPending = {
-    id: numericId,
-    eightDigitId: numericId,
-    submissionId,
-    name: item.name || "Unnamed Patient",
-    visitDate:
-      item.visitDate ||
-      new Date().toLocaleDateString("en-US", {
-        month: "2-digit",
-        day: "2-digit",
-        year: "numeric",
-      }),
-    clinician: item.clinician || DEFAULT_CLINICIAN,
-    submittedBy: item.submittedBy || odfDetails.submittedBy || null,
-    procedure: item.procedure || "Oral Diagnosis Form (ODF)",
-    notes: item.notes || item.historyOfPresentIllness || "",
-    status: item.status || "pending",
-    type: "ODF Submission",
-    odfDetails,
-    rawScanUrl: item.rawScanUrl || odfDetails.rawScanUrl || null,
-    rawScanPage2Url: item.rawScanPage2Url || odfDetails.rawScanPage2Url || null,
-    odontogramCropUrl: odfDetails.odontogramCropUrl,
-    consentCropUrl: odfDetails.consentCropUrl,
-    submittedAt: item.submittedAt || new Date().toISOString(),
-  };
+  const visitDate =
+    item.visitDate ||
+    new Date().toLocaleDateString("en-US", {
+      month: "2-digit",
+      day: "2-digit",
+      year: "numeric",
+    });
 
-  // 1. Immediately update LocalStorage cache (filter only exact submissionId so multiple submissions for same patient aren't overwritten)
-  const localPending = getLocalPending();
-  const updatedPending = [
-    formattedPending,
-    ...localPending.filter((p) => (p.submissionId || to8DigitId(p.id)) !== submissionId),
-  ];
-  saveLocalPending(updatedPending);
+  const clinician = item.clinician || DEFAULT_CLINICIAN;
+  const submittedBy = item.submittedBy || odfDetails.submittedBy || null;
+  const procedure = item.procedure || "Oral Diagnosis Form (ODF)";
+  const notes = item.notes || item.historyOfPresentIllness || "";
+  const rawScanUrl = item.rawScanUrl || odfDetails.rawScanUrl || null;
+  const rawScanPage2Url = item.rawScanPage2Url || odfDetails.rawScanPage2Url || null;
+  const odontogramCropUrl = odfDetails.odontogramCropUrl;
+  const consentCropUrl = odfDetails.consentCropUrl;
 
-  // 2. Also register or update patient in patients cache so the patient appears in records without wiping existing demographics
-  const localPatients = getLocalPatients();
-  const existingPatient = localPatients.find((p) => to8DigitId(p.id) === numericId);
-  if (!existingPatient) {
-    const newPatient = {
-      id: numericId,
-      eightDigitId: numericId,
-      name: formattedPending.name,
-      lastVisit: formattedPending.visitDate,
-      clinician: formattedPending.clinician,
-      procedure: formattedPending.procedure,
-      notes: formattedPending.notes,
-      phone: odfDetails.cellPhone || odfDetails.homeTel || "",
-      gender: odfDetails.sex || "Male",
-      dateOfBirth: odfDetails.birthDate || "",
-      age: odfDetails.age || "",
-      homeAddress: odfDetails.homeAddress || "",
-      odfData: odfDetails,
-    };
-    savePatientToSupabase(newPatient).catch(() => {});
-  } else {
-    // Update existing patient's lastVisit and merge odfData while preserving dbId & prior info
-    const mergedPatient = {
-      ...existingPatient,
-      lastVisit: formattedPending.visitDate || existingPatient.lastVisit,
-      clinician: formattedPending.clinician || existingPatient.clinician,
-      phone: odfDetails.cellPhone || existingPatient.phone,
-      gender: odfDetails.sex || existingPatient.gender,
-      dateOfBirth: odfDetails.birthDate || existingPatient.dateOfBirth,
-      age: odfDetails.age || existingPatient.age,
-      homeAddress: odfDetails.homeAddress || existingPatient.homeAddress,
-      odfData: {
-        ...(existingPatient.odfData || {}),
-        ...odfDetails,
-      },
-    };
-    savePatientToSupabase(mergedPatient).catch(() => {});
-  }
-
-  // 3. Attempt insert/upsert to Supabase pending_approvals table
   try {
     const payload = {
       eight_digit_id: numericId,
-      name: formattedPending.name,
-      visit_date: formattedPending.visitDate,
-      clinician: formattedPending.clinician,
-      submitted_by: formattedPending.submittedBy || odfDetails.submittedBy || null,
-      procedure: formattedPending.procedure,
-      notes: formattedPending.notes,
+      name: item.name || "Unnamed Patient",
+      visit_date: visitDate,
+      clinician,
+      submitted_by: submittedBy,
+      procedure,
+      notes,
       status: "pending",
-      raw_scan_url: formattedPending.rawScanUrl || odfDetails.rawScanUrl || null,
-      raw_scan_page2_url: formattedPending.rawScanPage2Url || odfDetails.rawScanPage2Url || null,
-      odontogram_crop_url: formattedPending.odontogramCropUrl || odfDetails.odontogramCropUrl || null,
-      consent_crop_url: formattedPending.consentCropUrl || odfDetails.consentCropUrl || null,
+      raw_scan_url: rawScanUrl,
+      raw_scan_page2_url: rawScanPage2Url,
+      odontogram_crop_url: odontogramCropUrl,
+      consent_crop_url: consentCropUrl,
       odf_details: odfDetails,
     };
 
     const { data, error } = await supabase
       .from("pending_approvals")
-      .upsert(payload, { onConflict: "eight_digit_id" })
+      .insert(payload)
       .select();
 
-    if (error) {
-      console.warn("[Supabase] savePending error:", error.message);
+    if (error || !data?.length) {
+      console.warn("[Supabase] savePending error:", error?.message || "No row returned");
       return {
         success: false,
-        error: sanitizeSupabaseError(error, "Persisted in local cache."),
-        data: formattedPending,
+        error: sanitizeSupabaseError(error, "Unable to submit ODF request."),
       };
     }
+
+    const savedPending = normalizePending(data[0]);
+    const localPending = getLocalPending();
+    const updatedPending = [
+      savedPending,
+      ...localPending.filter((p) => String(p.submissionId || p.dbId || "") !== savedPending.submissionId),
+    ];
+    saveLocalPending(updatedPending);
 
     return {
       success: true,
       error: null,
-      data: data?.[0] ? { ...normalizePending(data[0]), submissionId } : formattedPending,
+      data: savedPending,
     };
   } catch (err) {
     console.warn("[Supabase] Unexpected error saving pending approval:", err);
     return {
       success: false,
-      error: sanitizeSupabaseError(err, "Persisted in local cache."),
-      data: formattedPending,
+      error: sanitizeSupabaseError(err, "Unable to submit ODF request."),
     };
   }
 }
 
 /**
- * Approve a pending ODF request: updates pending_approvals and adds treatment record
+ * Approve a pending ODF request via server-side RPC `approve_pending_submission`
  */
 export async function approvePendingInSupabase(item) {
-  const numericId = to8DigitId(item.id);
-  const targetSubId = item.submissionId;
+  const numericId = to8DigitId(item.id || item.eightDigitId);
 
-  // 1. Update local pending cache
-  const localPending = getLocalPending();
-  saveLocalPending(
-    localPending.filter((p) => {
-      if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
-      return to8DigitId(p.id) !== numericId;
-    })
-  );
-
-  // 2. Add to treatment records (unique timestamped ID preserves full patient history!)
-  const treatmentRecord = {
-    id: `rec_${numericId}_${Date.now()}`,
-    patientId: numericId,
-    title: item.procedure || "Approved Oral Diagnosis Form (ODF)",
-    date: item.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
-    clinician: item.clinician || DEFAULT_CLINICIAN,
-    type: "odf",
-    typeLabel: "Approved ODF",
-    status: "Faculty Approved",
-    notes: item.notes || "Approved faculty procedure and ODF documentation.",
-    rawScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
-    rawScanPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
-    odfDetails: item.odfDetails || null,
-    odontogramCropUrl: item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl || null,
-    consentCropUrl: item.odfDetails?.consentCropUrl || item.consentCropUrl || null,
-    hasOdontogram: !!(item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl),
-  };
-  saveLocalRecord(treatmentRecord);
-
-  // 3. Merge with existing patient record so prior demographics and dbId are retained
-  const existingPatient = getLocalPatients().find((p) => to8DigitId(p.id) === numericId);
-  const patientResult = await savePatientToSupabase({
-    ...(existingPatient || {}),
-    id: numericId,
-    eightDigitId: numericId,
-    name: item.name || existingPatient?.name,
-    lastVisit: item.visitDate || existingPatient?.lastVisit,
-    clinician: item.clinician || existingPatient?.clinician || DEFAULT_CLINICIAN,
-    procedure: item.procedure || existingPatient?.procedure || "Approved Oral Diagnosis Form (ODF)",
-    notes: item.notes || existingPatient?.notes || "Approved faculty procedure and ODF documentation.",
-    phone: item.odfDetails?.cellPhone || existingPatient?.phone || "",
-    email: item.odfDetails?.email || existingPatient?.email || "",
-    gender: item.odfDetails?.sex || existingPatient?.gender || "Male",
-    dateOfBirth: item.odfDetails?.birthDate || existingPatient?.dateOfBirth || "",
-    age: item.odfDetails?.age || existingPatient?.age || "",
-    homeAddress: item.odfDetails?.homeAddress || existingPatient?.homeAddress || "",
-    latestOdfScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || existingPatient?.latestOdfScanUrl || null,
-    latestOdfPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || existingPatient?.latestOdfPage2Url || null,
-    odfData: {
-      ...(existingPatient?.odfData || {}),
-      ...(item.odfDetails || {}),
-    },
-  });
-
-  // 4. Update Supabase
   try {
-    await supabase
-      .from("pending_approvals")
-      .update({ status: "approved" })
-      .eq("eight_digit_id", numericId);
+    const { data, error } = await supabase.rpc("approve_pending_submission", {
+      p_submission_id: item.dbId ? String(item.dbId) : "",
+      p_eight_digit_id: numericId,
+    });
 
-    // Also insert into treatment_records in Supabase if patient has a dbId UUID
-    if (patientResult.data?.dbId && isUuid(patientResult.data.dbId)) {
-      await supabase.from("treatment_records").insert({
-        patient_id: patientResult.data.dbId,
-        procedure_name: item.procedure || "Approved ODF",
-        diagnosis: item.procedure,
-        notes: item.notes,
-        treatment_date: new Date().toISOString().split("T")[0],
-        cost: 0,
-      });
+    const patientRow = Array.isArray(data) ? data[0] : data;
+
+    if (error || !patientRow) {
+      console.warn("[Supabase] approvePending RPC error:", error?.message || "No data returned");
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Approval failed. Please try again."),
+      };
     }
 
-    return { success: true, data: patientResult.data };
+    const normalizedPatient = normalizePatient(patientRow);
+
+    // 1. Update local pending cache
+    const targetDbId = item.dbId ? String(item.dbId) : null;
+    const targetSubId = item.submissionId ? String(item.submissionId) : null;
+    const localPending = getLocalPending();
+    saveLocalPending(
+      localPending.filter((p) => {
+        if (targetDbId && p.dbId != null) return String(p.dbId) !== targetDbId;
+        if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
+        return to8DigitId(p.id) !== numericId;
+      })
+    );
+
+    // 2. Add to treatment records cache
+    const treatmentRecord = {
+      id: `rec_${numericId}_${Date.now()}`,
+      patientId: numericId,
+      title: item.procedure || "Approved Oral Diagnosis Form (ODF)",
+      date: item.visitDate || new Date().toLocaleDateString("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }),
+      clinician: item.clinician || DEFAULT_CLINICIAN,
+      type: "odf",
+      typeLabel: "Approved ODF",
+      status: "Faculty Approved",
+      notes: item.notes || "Approved faculty procedure and ODF documentation.",
+      rawScanUrl: item.rawScanUrl || item.odfDetails?.rawScanUrl || null,
+      rawScanPage2Url: item.rawScanPage2Url || item.odfDetails?.rawScanPage2Url || null,
+      odfDetails: item.odfDetails || null,
+      odontogramCropUrl: item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl || null,
+      consentCropUrl: item.odfDetails?.consentCropUrl || item.consentCropUrl || null,
+      hasOdontogram: !!(item.odfDetails?.odontogramCropUrl || item.odontogramCropUrl),
+    };
+    saveLocalRecord(treatmentRecord);
+
+    // 3. Update local patients cache with the server-returned patient row
+    const localPatients = getLocalPatients();
+    saveLocalPatients([
+      normalizedPatient,
+      ...localPatients.filter((p) => to8DigitId(p.eightDigitId || p.id) !== normalizedPatient.eightDigitId),
+    ]);
+
+    return { success: true, data: normalizedPatient };
   } catch (err) {
     console.warn("[Supabase] Unexpected error approving pending item:", err);
-    return { success: true, data: patientResult.data };
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Approval failed. Please try again."),
+    };
   }
 }
 
@@ -1074,37 +993,46 @@ export async function approvePendingInSupabase(item) {
  * Decline a pending ODF request
  */
 export async function declinePendingInSupabase(item) {
-  const numericId = to8DigitId(item.id);
-  const targetSubId = item.submissionId;
-
-  // Update local pending cache
-  const localPending = getLocalPending();
-  saveLocalPending(
-    localPending.filter((p) => {
-      if (targetSubId && p.submissionId) return p.submissionId !== targetSubId;
-      return to8DigitId(p.id) !== numericId;
-    })
-  );
+  const numericId = to8DigitId(item.id || item.eightDigitId);
 
   try {
-    const { error } = await supabase
+    let query = supabase
       .from("pending_approvals")
-      .update({ status: "declined" })
-      .eq("eight_digit_id", numericId);
+      .update({ status: "declined" });
 
-    if (error) {
-      console.warn("[Supabase] declinePending error:", error.message);
+    if (item.dbId) {
+      query = query.eq("id", item.dbId);
+    } else {
+      query = query.eq("eight_digit_id", numericId);
+    }
+
+    const { data, error } = await query.select();
+
+    if (error || !data?.length) {
+      console.warn("[Supabase] declinePending error:", error?.message || "No rows updated");
       return {
         success: false,
-        error: sanitizeSupabaseError(error, "Updated locally."),
+        error: sanitizeSupabaseError(error, "Unable to decline submission."),
       };
     }
+
+    const targetDbId = item.dbId ? String(item.dbId) : null;
+    const targetSubId = item.submissionId ? String(item.submissionId) : null;
+    const localPending = getLocalPending();
+    saveLocalPending(
+      localPending.filter((p) => {
+        if (targetDbId && p.dbId != null) return String(p.dbId) !== targetDbId;
+        if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
+        return to8DigitId(p.id) !== numericId;
+      })
+    );
+
     return { success: true };
   } catch (err) {
     console.warn("[Supabase] Unexpected error declining pending item:", err);
     return {
       success: false,
-      error: sanitizeSupabaseError(err, "Updated locally."),
+      error: sanitizeSupabaseError(err, "Unable to decline submission."),
     };
   }
 }
@@ -1423,11 +1351,60 @@ export async function fetchPatientHistoryRecords(patient) {
  */
 export async function deleteSelectedPatientRecords(patient, recordsToDelete = []) {
   if (!patient || !Array.isArray(recordsToDelete) || recordsToDelete.length === 0) {
-    return { success: false, deletedIds: [] };
+    return { success: false, deletedIds: [], error: "No records selected for deletion." };
   }
   const numericId = to8DigitId(patient.id || patient.eightDigitId);
   const targetIds = recordsToDelete.map((r) => (typeof r === "string" ? r : r.id)).filter(Boolean);
   const targetIdSet = new Set(targetIds);
+
+  // Verify every remote Supabase deletion succeeds BEFORE modifying local blocklists or caches
+  for (const record of recordsToDelete) {
+    const id = typeof record === "string" ? record : record?.id;
+    const recordDbId = typeof record === "object" && record !== null ? record.dbId : null;
+    if (!id) continue;
+
+    try {
+      if (id.startsWith("tr_")) {
+        const dbRecordId = id.slice(3);
+        const { error } = await supabase.from("treatment_records").delete().eq("id", dbRecordId);
+        if (error) {
+          return {
+            success: false,
+            deletedIds: [],
+            error: sanitizeSupabaseError(error, "Delete failed."),
+          };
+        }
+      } else if (id.startsWith("appr_")) {
+        const apprId = id.split("_")[1];
+        if (apprId) {
+          const { error } = await supabase.from("pending_approvals").delete().eq("id", apprId);
+          if (error) {
+            return {
+              success: false,
+              deletedIds: [],
+              error: sanitizeSupabaseError(error, "Delete failed."),
+            };
+          }
+        }
+      } else if (recordDbId) {
+        const { error } = await supabase.from("pending_approvals").delete().eq("id", recordDbId);
+        if (error) {
+          return {
+            success: false,
+            deletedIds: [],
+            error: sanitizeSupabaseError(error, "Delete failed."),
+          };
+        }
+      }
+    } catch (err) {
+      console.warn("[Supabase] Error deleting record:", id, err);
+      return {
+        success: false,
+        deletedIds: [],
+        error: sanitizeSupabaseError(err, "Delete failed."),
+      };
+    }
+  }
 
   // Persist deleted record IDs (including init_ marker so cleared baseline doesn't re-spawn)
   addDeletedRecordIds([...targetIds, `init_${numericId}`]);
@@ -1439,27 +1416,12 @@ export async function deleteSelectedPatientRecords(patient, recordsToDelete = []
   // Remove matching pending entries if user deleted a pending ODF row
   const nextLocalPending = getLocalPending().filter((p) => {
     const subId = p.submissionId || `pending_${to8DigitId(p.eightDigitId || p.id)}_${p.visitDate || ""}`;
-    if (targetIdSet.has(subId) || targetIdSet.has(p.submissionId)) return false;
+    if (targetIdSet.has(subId) || targetIdSet.has(p.submissionId) || targetIdSet.has(String(p.dbId))) {
+      return false;
+    }
     return true;
   });
   saveLocalPending(nextLocalPending);
-
-  // Best-effort remote deletion in Supabase
-  for (const id of targetIds) {
-    try {
-      if (id.startsWith("tr_")) {
-        const dbRecordId = id.slice(3);
-        await supabase.from("treatment_records").delete().eq("id", dbRecordId);
-      } else if (id.startsWith("appr_")) {
-        const apprId = id.split("_")[1];
-        if (apprId) {
-          await supabase.from("pending_approvals").delete().eq("id", apprId);
-        }
-      }
-    } catch (err) {
-      console.warn("[Supabase] Error deleting record:", id, err);
-    }
-  }
 
   return { success: true, deletedIds: targetIds };
 }
@@ -1469,8 +1431,63 @@ export async function deleteSelectedPatientRecords(patient, recordsToDelete = []
  * Available exclusively to Dentistry Department Faculty and System Administrators.
  */
 export async function deleteEntirePatient(patient) {
-  if (!patient) return { success: false };
+  if (!patient) return { success: false, error: "No patient selected." };
   const numericId = to8DigitId(patient.id || patient.eightDigitId);
+
+  // Verify all remote Supabase deletions succeed BEFORE adding to blocklist or mutating caches
+  try {
+    const { error: pendingError } = await supabase
+      .from("pending_approvals")
+      .delete()
+      .eq("eight_digit_id", numericId);
+    if (pendingError) {
+      return {
+        success: false,
+        error: sanitizeSupabaseError(pendingError, "Delete failed."),
+      };
+    }
+
+    if (patient.dbId && isUuid(patient.dbId)) {
+      const { error: treatmentError } = await supabase
+        .from("treatment_records")
+        .delete()
+        .eq("patient_id", patient.dbId);
+      if (treatmentError) {
+        return {
+          success: false,
+          error: sanitizeSupabaseError(treatmentError, "Delete failed."),
+        };
+      }
+
+      const { error: patientByIdError } = await supabase
+        .from("patients")
+        .delete()
+        .eq("id", patient.dbId);
+      if (patientByIdError) {
+        return {
+          success: false,
+          error: sanitizeSupabaseError(patientByIdError, "Delete failed."),
+        };
+      }
+    }
+
+    const { error: patientByNumError } = await supabase
+      .from("patients")
+      .delete()
+      .eq("eight_digit_id", numericId);
+    if (patientByNumError) {
+      return {
+        success: false,
+        error: sanitizeSupabaseError(patientByNumError, "Delete failed."),
+      };
+    }
+  } catch (err) {
+    console.warn("[Supabase] Error deleting patient:", numericId, err);
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Delete failed."),
+    };
+  }
 
   // 1. Add patient ID to deleted blocklist so default seeds / stale caches never resurrect it
   addDeletedPatientIds([numericId]);
@@ -1484,18 +1501,6 @@ export async function deleteEntirePatient(patient) {
 
   const nextPending = getLocalPending().filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId);
   saveLocalPending(nextPending);
-
-  // 3. Best-effort deletion from Supabase tables
-  try {
-    await supabase.from("pending_approvals").delete().eq("eight_digit_id", numericId);
-    if (patient.dbId && isUuid(patient.dbId)) {
-      await supabase.from("treatment_records").delete().eq("patient_id", patient.dbId);
-      await supabase.from("patients").delete().eq("id", patient.dbId);
-    }
-    await supabase.from("patients").delete().eq("eight_digit_id", numericId);
-  } catch (err) {
-    console.warn("[Supabase] Error deleting patient:", numericId, err);
-  }
 
   return { success: true, patientId: numericId };
 }
