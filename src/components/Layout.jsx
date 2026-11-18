@@ -45,6 +45,7 @@ export default function Layout({
         key: "approvals",
         label: normRole === "student_clinician" ? "ODF Submissions" : "Pending Approvals",
       });
+      tabs.push({ key: "requirements", label: "Requirements" });
     }
     tabs.push({ key: "settings", label: "Settings" });
   }

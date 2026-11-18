@@ -11,6 +11,7 @@ import {
   getTodayManilaIso,
   getTodayManilaDisplay,
   computeCanonicalRecordHash,
+  DECLINE_RUBRIC_DOMAINS,
 } from "../lib/dentalService";
 import {
   analyzeOdfWithAzure,
@@ -84,12 +85,14 @@ export default function OralDiagnosisForm({
   readOnly = false,
   isSubmissionView = false,
   onViewUploadedScans = null,
+  revisionFeedback = null,
   onSave = () => {},
   onCancel = () => {},
   currentUser,
 }) {
   const isStudent = isStudentClinician(currentUser?.role);
   const hideFull2PageBtn = isSubmissionView && isStudent;
+  const activeRevisionFeedback = revisionFeedback || initialData?.reviewFeedback || null;
 
   const [activePage, setActivePage] = useState(
     hideFull2PageBtn ? "page1" : readOnly ? "all" : "page1"
@@ -140,11 +143,18 @@ export default function OralDiagnosisForm({
       // Case History
       chiefComplaints: initialData?.chiefComplaints?.length === 4
         ? initialData.chiefComplaints
+        : Array.isArray(initialData?.chiefComplaints)
+        ? [
+            initialData.chiefComplaints[0] || "",
+            initialData.chiefComplaints[1] || "",
+            initialData.chiefComplaints[2] || "",
+            initialData.chiefComplaints[3] || "",
+          ]
         : [
-            initialData?.procedure || (initialData?.chiefComplaints?.[0] || ""),
-            initialData?.chiefComplaints?.[1] || "",
-            initialData?.chiefComplaints?.[2] || "",
-            initialData?.chiefComplaints?.[3] || "",
+            initialData?.procedure || "",
+            "",
+            "",
+            "",
           ],
       historyOfPresentIllness: initialData?.historyOfPresentIllness || initialData?.notes || "",
 
@@ -798,6 +808,8 @@ export default function OralDiagnosisForm({
       consentCropUrl: form.consentCropUrl,
       odfDetails: {
         ...form,
+        approvalSignature: null,
+        reviewFeedback: null,
         clinician: activeClinician,
         submittedBy: submittedByEmail,
         clinicianRole: currentUser?.role || "",
@@ -963,6 +975,68 @@ export default function OralDiagnosisForm({
         <div className="ceu-odf-scroll-container">
           <div style={{ maxWidth: "900px", margin: "0 auto 12px" }}>
             <MedicalAlertBanner odfData={form} />
+
+            {activeRevisionFeedback && (() => {
+              const rubricMap = activeRevisionFeedback.rubric || {};
+              const flaggedDomains = DECLINE_RUBRIC_DOMAINS.filter(
+                (d) => rubricMap[d.id] === "needs_revision"
+              );
+              return (
+                <div
+                  role="region"
+                  aria-label="Faculty Revision Feedback"
+                  style={{
+                    background: "#fffbeb",
+                    border: "1.5px solid #f59e0b",
+                    borderRadius: "10px",
+                    padding: "12px 16px",
+                    marginTop: "10px",
+                    color: "#78350f",
+                    fontSize: "12.5px",
+                    lineHeight: "1.5",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px", marginBottom: "6px" }}>
+                    <strong style={{ fontSize: "13px", color: "#92400e" }}>
+                      Faculty Revision Instructions
+                    </strong>
+                    <span style={{ fontSize: "11.5px", color: "#b45309", fontWeight: "600" }}>
+                      {activeRevisionFeedback.reviewerName ? `Reviewed by ${activeRevisionFeedback.reviewerName}` : "Returned by Supervising Faculty"}
+                      {activeRevisionFeedback.reviewedAt ? ` · ${formatSignatureTimestamp(activeRevisionFeedback.reviewedAt)}` : ""}
+                    </span>
+                  </div>
+                  {flaggedDomains.length > 0 && (
+                    <div style={{ marginBottom: "6px" }}>
+                      <div style={{ fontWeight: "700", fontSize: "11.5px", color: "#92400e", marginBottom: "4px" }}>
+                        Flagged Domains Requiring Revision:
+                      </div>
+                      <ul style={{ margin: 0, paddingLeft: "18px", display: "grid", gap: "2px" }}>
+                        {flaggedDomains.map((d) => (
+                          <li key={d.id} style={{ fontWeight: "600" }}>
+                            {d.label}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {activeRevisionFeedback.comments && (
+                    <div
+                      style={{
+                        background: "#ffffff",
+                        border: "1px solid #fde68a",
+                        borderRadius: "8px",
+                        padding: "8px 10px",
+                        color: "#0f172a",
+                        fontSize: "12.5px",
+                      }}
+                    >
+                      <strong style={{ color: "#92400e" }}>Clinical Remarks:</strong>{" "}
+                      {activeRevisionFeedback.comments}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {form.approvalSignature && (
               signatureStatus === "tampered" ? (

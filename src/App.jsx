@@ -4,6 +4,7 @@ import Login from "./components/Login";
 import PatientRecord from "./components/PatientRecord";
 import PendingApproval from "./components/PendingApproval";
 import Settings from "./components/Settings";
+import ClinicalRequirements from "./components/ClinicalRequirements";
 import PatientRecordsHistoryModal from "./components/PatientRecordsHistoryModal";
 import OralDiagnosisForm from "./components/OralDiagnosisForm";
 import DocumentViewerModal from "./components/DocumentViewerModal";
@@ -13,6 +14,7 @@ import { supabase } from "./lib/supabaseClient";
 import {
   fetchPatientsFromSupabase,
   fetchPendingFromSupabase,
+  fetchDeclinedSubmissionsFromSupabase,
   savePatientToSupabase,
   savePendingToSupabase,
   approvePendingInSupabase,
@@ -98,6 +100,7 @@ function buildOdfInitialDataFromRecord(patient, record) {
     : rOdf.treatmentLog || pOdf.treatmentLog || [];
 
   const isOdfRec = record?.type === "odf";
+  const hasRecordOdf = Object.keys(rOdf).length > 0;
 
   return {
     ...merged,
@@ -116,40 +119,38 @@ function buildOdfInitialDataFromRecord(patient, record) {
     nationality: rOdf.nationality || pOdf.nationality || patient?.nationality || "Filipino",
     occupation: rOdf.occupation || pOdf.occupation || patient?.occupation || "",
     religion: rOdf.religion || pOdf.religion || patient?.religion || "",
-    chiefComplaints:
-      Array.isArray(rOdf.chiefComplaints) && rOdf.chiefComplaints.some(Boolean)
+    chiefComplaints: hasRecordOdf
+      ? Array.isArray(rOdf.chiefComplaints)
         ? rOdf.chiefComplaints
-        : [
-            record?.title || patient?.procedure || "",
-            record?.summary || "",
-            "",
-            "",
-          ],
-    historyOfPresentIllness:
-      rOdf.historyOfPresentIllness ||
-      record?.notes ||
-      record?.summary ||
-      (isOdfRec ? pOdf.historyOfPresentIllness : "") ||
-      patient?.notes ||
-      "",
-    tentativeDiagnosis:
-      Array.isArray(rOdf.tentativeDiagnosis) && rOdf.tentativeDiagnosis.some(Boolean)
+        : ["", "", "", ""]
+      : [record?.title || patient?.procedure || "", record?.summary || "", "", ""],
+    historyOfPresentIllness: hasRecordOdf
+      ? rOdf.historyOfPresentIllness || ""
+      : record?.notes ||
+        record?.summary ||
+        (isOdfRec ? pOdf.historyOfPresentIllness : "") ||
+        patient?.notes ||
+        "",
+    tentativeDiagnosis: hasRecordOdf
+      ? Array.isArray(rOdf.tentativeDiagnosis)
         ? rOdf.tentativeDiagnosis
-        : record?.diagnosis
-        ? [record.diagnosis]
-        : record?.title
-        ? [record.title]
-        : isOdfRec && Array.isArray(pOdf.tentativeDiagnosis)
-        ? pOdf.tentativeDiagnosis
-        : [""],
-    recommendedTreatmentPlan:
-      Array.isArray(rOdf.recommendedTreatmentPlan) && rOdf.recommendedTreatmentPlan.some(Boolean)
+        : [""]
+      : record?.diagnosis
+      ? [record.diagnosis]
+      : record?.title
+      ? [record.title]
+      : isOdfRec && Array.isArray(pOdf.tentativeDiagnosis)
+      ? pOdf.tentativeDiagnosis
+      : [""],
+    recommendedTreatmentPlan: hasRecordOdf
+      ? Array.isArray(rOdf.recommendedTreatmentPlan)
         ? rOdf.recommendedTreatmentPlan
-        : record?.title
-        ? [record.title]
-        : isOdfRec && Array.isArray(pOdf.recommendedTreatmentPlan)
-        ? pOdf.recommendedTreatmentPlan
-        : [""],
+        : [""]
+      : record?.title
+      ? [record.title]
+      : isOdfRec && Array.isArray(pOdf.recommendedTreatmentPlan)
+      ? pOdf.recommendedTreatmentPlan
+      : [""],
     examinedBy: rOdf.examinedBy || "",
     examDate: toIsoDateInput(rOdf.examDate || recordDate),
     clinicLevel: rOdf.clinicLevel || pOdf.clinicLevel || "",
@@ -182,6 +183,7 @@ function AppRoutes() {
 
   const [patients, setPatients] = useState([]);
   const [pending, setPending] = useState([]);
+  const [declined, setDeclined] = useState([]);
   const [historyTarget, setHistoryTarget] = useState(null); // { patient, initialRecord }
   const [viewRecordTarget, setViewRecordTarget] = useState(null); // { patient, record } -> Full 2-page ODF view
   const [odfModalTarget, setOdfModalTarget] = useState(null); // patient object to open ODF for
@@ -202,6 +204,7 @@ function AppRoutes() {
     clearAllLocalPhi();
     setPatients([]);
     setPending([]);
+    setDeclined([]);
     setHistoryTarget(null);
     setViewRecordTarget(null);
     setOdfModalTarget(null);
@@ -389,9 +392,10 @@ function AppRoutes() {
     async (showNotice = true) => {
       setIsSyncing(true);
       try {
-        const [patientsRes, pendingRes] = await Promise.all([
+        const [patientsRes, pendingRes, declinedRes] = await Promise.all([
           fetchPatientsFromSupabase(),
           fetchPendingFromSupabase(),
+          fetchDeclinedSubmissionsFromSupabase(),
         ]);
 
         let loadedCount = 0;
@@ -405,6 +409,10 @@ function AppRoutes() {
           const nextPending = pendingRes.data || [];
           setPending(nextPending);
           loadedCount += nextPending.length;
+        }
+
+        if (declinedRes.success) {
+          setDeclined(declinedRes.data || []);
         }
 
         if (showNotice) {
@@ -431,9 +439,10 @@ function AppRoutes() {
     let active = true;
     (async () => {
       try {
-        const [patientsRes, pendingRes] = await Promise.all([
+        const [patientsRes, pendingRes, declinedRes] = await Promise.all([
           fetchPatientsFromSupabase(),
           fetchPendingFromSupabase(),
+          fetchDeclinedSubmissionsFromSupabase(),
         ]);
         if (!active) return;
         if (patientsRes.success) {
@@ -441,6 +450,9 @@ function AppRoutes() {
         }
         if (pendingRes.success) {
           setPending(pendingRes.data || []);
+        }
+        if (declinedRes.success) {
+          setDeclined(declinedRes.data || []);
         }
       } catch (err) {
         console.warn("Initial Supabase load error:", err);
@@ -462,6 +474,7 @@ function AppRoutes() {
   const handleNavigate = (key) => {
     if (key === "patients") navigate("/patients");
     else if (key === "approvals") navigate("/approvals");
+    else if (key === "requirements") navigate("/requirements");
     else if (key === "settings") navigate("/settings");
     else navigate(`/${key}`);
   };
@@ -661,8 +674,8 @@ function AppRoutes() {
     return res;
   };
 
-  // Decline a pending request
-  const handleDecline = async (item) => {
+  // Decline a pending request with structured faculty feedback
+  const handleDecline = async (item, reviewFeedback = null) => {
     if (!canApproveODF(currentUser)) {
       showToast("❌ Permission Denied: Student Clinicians cannot decline ODF submissions.");
       return { success: false };
@@ -671,9 +684,9 @@ function AppRoutes() {
     const targetDbId = item.dbId ? String(item.dbId) : null;
     const targetSubId = item.submissionId ? String(item.submissionId) : null;
 
-    showToast(`Declining #${formattedId} (${item.name})...`);
+    showToast(`Returning #${formattedId} (${item.name}) for revision...`);
 
-    const res = await declinePendingInSupabase(item);
+    const res = await declinePendingInSupabase(item, reviewFeedback);
     if (!res?.success) {
       showToast(`❌ ${res?.error || "Operation failed."}`);
       return res || { success: false };
@@ -686,8 +699,25 @@ function AppRoutes() {
         return to8DigitId(p.id) !== formattedId;
       })
     );
+
+    const declinedRecord = res.data || {
+      ...item,
+      status: "declined",
+      reviewFeedback,
+      reviewedBy: reviewFeedback?.reviewerId || null,
+      reviewedAt: reviewFeedback?.reviewedAt || new Date().toISOString(),
+    };
+    setDeclined((prev) => [
+      declinedRecord,
+      ...prev.filter(
+        (d) =>
+          String(d.submissionId || d.dbId || "") !==
+          String(declinedRecord.submissionId || declinedRecord.dbId || "")
+      ),
+    ]);
+
     setActiveReviewModal(null);
-    showToast(`✓ Declined request for #${formattedId} in Supabase.`);
+    showToast(`✓ Returned request #${formattedId} with faculty feedback.`);
     return res;
   };
 
@@ -817,13 +847,28 @@ function AppRoutes() {
           element={
             <PendingApproval
               pending={pending}
+              declined={declined}
               patients={patients}
               onNavigate={handleNavigate}
               onReview={handleReview}
               onApprove={handleApprove}
               onDecline={handleDecline}
               onAddPending={handleUploadODF}
+              onRefreshDeclined={async () => {
+                const res = await fetchDeclinedSubmissionsFromSupabase();
+                if (res.success) setDeclined(res.data || []);
+              }}
               isSyncing={isSyncing}
+              currentUser={currentUser}
+              onSignOut={handleSignOut}
+            />
+          }
+        />
+        <Route
+          path="/requirements"
+          element={
+            <ClinicalRequirements
+              onNavigate={handleNavigate}
               currentUser={currentUser}
               onSignOut={handleSignOut}
             />

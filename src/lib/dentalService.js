@@ -47,6 +47,14 @@ function sanitizeSupabaseError(error, fallback = "Unable to sync with cloud data
 export const UNASSIGNED_CLINICIAN = "Unassigned Clinician";
 export const DEFAULT_CLINICIAN = UNASSIGNED_CLINICIAN;
 
+export const DECLINE_RUBRIC_DOMAINS = [
+  { id: "demographicsConsent", label: "Demographics & Data Privacy Consent" },
+  { id: "medicalHistory", label: "Medical & Dental History Completeness" },
+  { id: "odontogramCharting", label: "Odontogram Charting Accuracy (FDI / Red-Blue Codes)" },
+  { id: "diagnosticPlan", label: "Diagnostic Tests, Diagnosis & Treatment Plan" },
+  { id: "clinicalDocumentation", label: "Clinical Notes & Signatures" },
+];
+
 /**
  * Computes a deterministic lowercase hex SHA-256 digest over canonicalized clinical/consent ODF fields.
  */
@@ -85,7 +93,6 @@ export async function computeCanonicalRecordHash(rawOdf = {}) {
     consentCropUrl: src.consentCropUrl ? String(src.consentCropUrl).trim() : null,
     consentPatientName: String(src.consentPatientName || "").trim(),
     eightDigitId: to8DigitId(src.eightDigitId),
-    examinedBy: String(src.examinedBy || "").trim(),
     historyOfPresentIllness: String(src.historyOfPresentIllness || "").trim(),
     name: String(src.name || "").trim(),
     odontogramCropUrl: src.odontogramCropUrl ? String(src.odontogramCropUrl).trim() : null,
@@ -668,6 +675,9 @@ function normalizePending(row, index = 1) {
     status: row.status || "pending",
     type: "ODF Submission",
     odfDetails,
+    reviewFeedback: row.review_feedback || odfDetails.reviewFeedback || null,
+    reviewedBy: row.reviewed_by || null,
+    reviewedAt: row.reviewed_at || null,
     rawScanUrl: row.raw_scan_url || odfDetails.rawScanUrl || null,
     rawScanPage2Url: row.raw_scan_page2_url || odfDetails.rawScanPage2Url || null,
     odontogramCropUrl: row.odontogram_crop_url || odfDetails.odontogramCropUrl || null,
@@ -742,6 +752,109 @@ export async function fetchPendingFromSupabase() {
       success: false,
       error: sanitizeSupabaseError(err, "Unable to fetch pending submissions."),
       data: [],
+    };
+  }
+}
+
+/**
+ * Fetch declined/returned ODF submissions from Supabase `pending_approvals` table
+ */
+export async function fetchDeclinedSubmissionsFromSupabase() {
+  try {
+    let { data, error } = await supabase
+      .from("pending_approvals")
+      .select("*")
+      .eq("status", "declined")
+      .order("reviewed_at", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false });
+
+    if (error && String(error.message || "").toLowerCase().includes("reviewed_at")) {
+      const retry = await supabase
+        .from("pending_approvals")
+        .select("*")
+        .eq("status", "declined")
+        .order("created_at", { ascending: false });
+      data = retry.data;
+      error = retry.error;
+    }
+
+    if (error) {
+      console.warn("[Supabase] fetchDeclinedSubmissions error:", error.message);
+      return {
+        success: false,
+        error: sanitizeSupabaseError(error, "Unable to fetch returned submissions."),
+        data: [],
+      };
+    }
+
+    const normalized = (Array.isArray(data) ? data : []).map((r, i) =>
+      normalizePending(r, i + 1)
+    );
+    return { success: true, error: null, data: normalized };
+  } catch (err) {
+    console.warn("[Supabase] Unexpected error fetching declined submissions:", err);
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Unable to fetch returned submissions."),
+      data: [],
+    };
+  }
+}
+
+/**
+ * Fetch clinical graduation requirements and student requirement credits from Supabase
+ */
+export async function fetchClinicalRequirementsData(userEmail = null, isFacultyOrAdmin = false) {
+  try {
+    const reqQuery = supabase
+      .from("clinical_requirements")
+      .select("*")
+      .order("clinic_level", { ascending: true })
+      .order("procedure_category", { ascending: true });
+
+    let creditsPromise;
+    if (!isFacultyOrAdmin && !userEmail) {
+      creditsPromise = Promise.resolve({ data: [], error: null });
+    } else {
+      let creditsQuery = supabase.from("student_requirement_credits").select("*");
+      if (!isFacultyOrAdmin && userEmail) {
+        creditsQuery = creditsQuery.ilike("student_email", userEmail.trim());
+      }
+      creditsPromise = creditsQuery;
+    }
+
+    const [reqRes, credRes] = await Promise.all([reqQuery, creditsPromise]);
+
+    if (reqRes.error || credRes.error) {
+      const err = reqRes.error || credRes.error;
+      console.warn("[Supabase] fetchClinicalRequirementsData error:", err.message);
+      return {
+        success: false,
+        error: sanitizeSupabaseError(err, "Unable to load clinical requirements data."),
+        requirements: Array.isArray(reqRes.data) ? reqRes.data : [],
+        credits: Array.isArray(credRes.data) ? credRes.data : [],
+      };
+    }
+
+    const sortedCredits = (Array.isArray(credRes.data) ? [...credRes.data] : []).sort((a, b) => {
+      const da = new Date(a.credited_at || a.visit_date || a.created_at || 0).getTime();
+      const db = new Date(b.credited_at || b.visit_date || b.created_at || 0).getTime();
+      return (Number.isNaN(db) ? 0 : db) - (Number.isNaN(da) ? 0 : da);
+    });
+
+    return {
+      success: true,
+      error: null,
+      requirements: Array.isArray(reqRes.data) ? reqRes.data : [],
+      credits: sortedCredits,
+    };
+  } catch (err) {
+    console.warn("[Supabase] Unexpected error fetching clinical requirements:", err);
+    return {
+      success: false,
+      error: sanitizeSupabaseError(err, "Unable to load clinical requirements data."),
+      requirements: [],
+      credits: [],
     };
   }
 }
@@ -1164,15 +1277,21 @@ export async function approvePendingInSupabase(item) {
 }
 
 /**
- * Decline a pending ODF request
+ * Decline a pending ODF request with optional structured faculty rubric feedback
  */
-export async function declinePendingInSupabase(item) {
+export async function declinePendingInSupabase(item, reviewFeedback = null) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
+  const reviewedAtIso = reviewFeedback?.reviewedAt || new Date().toISOString();
 
   try {
     let query = supabase
       .from("pending_approvals")
-      .update({ status: "declined" });
+      .update({
+        status: "declined",
+        review_feedback: reviewFeedback,
+        reviewed_by: reviewFeedback?.reviewerId || null,
+        reviewed_at: reviewedAtIso,
+      });
 
     if (item.dbId) {
       query = query.eq("id", item.dbId);
@@ -1201,15 +1320,17 @@ export async function declinePendingInSupabase(item) {
       })
     );
 
+    const declinedItem = normalizePending(data[0]);
+
     await logClinicalAuditEvent(
       "FACULTY_DECLINED",
       numericId,
       item.dbId || item.submissionId || numericId,
       item.odfDetails?.submittedRecordHash || "",
-      { name: item.name, procedure: item.procedure }
+      { name: item.name, procedure: item.procedure, reviewFeedback }
     );
 
-    return { success: true };
+    return { success: true, data: declinedItem };
   } catch (err) {
     console.warn("[Supabase] Unexpected error declining pending item:", err);
     return {
