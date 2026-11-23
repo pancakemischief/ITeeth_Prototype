@@ -52,7 +52,7 @@ async function requireAuth(req: Request, res: Response, next: NextFunction): Pro
     return;
   }
 
-  if (!supabaseServer) {
+  if (!supabaseServer || !supabaseUrl || !supabaseAnonKey) {
     res.status(503).json({ error: "Authentication service is unconfigured on the server." });
     return;
   }
@@ -65,7 +65,39 @@ async function requireAuth(req: Request, res: Response, next: NextFunction): Pro
       });
       return;
     }
+
+    const userScopedClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    });
+
+    const { data: profile, error: profileError } = await userScopedClient
+      .from("profiles")
+      .select("id, role, status")
+      .eq("id", data.user.id)
+      .single();
+
+    if (
+      profileError ||
+      !profile ||
+      profile.status !== "approved" ||
+      !["student_clinician", "faculty", "admin"].includes(String(profile.role || "").toLowerCase())
+    ) {
+      res.status(403).json({
+        error: "Forbidden: Approved clinic staff access is required for OCR and dictation endpoints.",
+      });
+      return;
+    }
+
     (req as any).user = data.user;
+    (req as any).userProfile = profile;
     next();
   } catch {
     res.status(401).json({ error: "Unauthorized: Failed to authenticate session token." });

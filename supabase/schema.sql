@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS public.pending_approvals (
   procedure text,
   notes text,
   status text DEFAULT 'pending',
-  clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL DEFAULT auth.uid(),
   raw_scan_url text,
   raw_scan_page2_url text,
   odontogram_crop_url text,
@@ -210,7 +210,7 @@ ALTER TABLE public.pending_approvals
   ADD COLUMN IF NOT EXISTS procedure text,
   ADD COLUMN IF NOT EXISTS notes text,
   ADD COLUMN IF NOT EXISTS status text DEFAULT 'pending',
-  ADD COLUMN IF NOT EXISTS clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS clinician_id uuid REFERENCES auth.users(id) ON DELETE SET NULL DEFAULT auth.uid(),
   ADD COLUMN IF NOT EXISTS raw_scan_url text,
   ADD COLUMN IF NOT EXISTS raw_scan_page2_url text,
   ADD COLUMN IF NOT EXISTS odontogram_crop_url text,
@@ -223,6 +223,9 @@ ALTER TABLE public.pending_approvals
   ADD COLUMN IF NOT EXISTS deleted_at timestamptz,
   ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT timezone('utc'::text, now()),
   ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT timezone('utc'::text, now());
+
+ALTER TABLE public.pending_approvals
+  ALTER COLUMN clinician_id SET DEFAULT auth.uid();
 
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_eight_digit_id ON public.pending_approvals (eight_digit_id);
 CREATE INDEX IF NOT EXISTS idx_pending_approvals_status ON public.pending_approvals (status);
@@ -438,7 +441,10 @@ CREATE POLICY "patients_read" ON public.patients
   FOR SELECT TO authenticated
   USING (
     (NOT COALESCE(is_deleted, false)) AND
-    (public.app_role() IN ('student_clinician', 'faculty', 'admin'))
+    (
+      public.app_role() IN ('student_clinician', 'faculty', 'admin') OR
+      (public.app_role() = 'patient' AND patient_user_id = auth.uid())
+    )
   );
 
 CREATE POLICY "patients_insert" ON public.patients
@@ -451,10 +457,11 @@ CREATE POLICY "patients_update" ON public.patients
   WITH CHECK (public.app_role() IN ('faculty', 'admin'));
 
 -- Policies for pending_approvals:
--- Students submit as themselves with status 'pending'
+-- Clinic staff submit as themselves with status 'pending'
 CREATE POLICY "pending_insert" ON public.pending_approvals
   FOR INSERT TO authenticated
   WITH CHECK (
+    public.app_role() IN ('student_clinician', 'faculty', 'admin') AND
     clinician_id = auth.uid() AND
     status = 'pending'
   );
@@ -478,7 +485,18 @@ CREATE POLICY "treatment_records_read" ON public.treatment_records
   FOR SELECT TO authenticated
   USING (
     (NOT COALESCE(is_deleted, false)) AND
-    (public.app_role() IN ('student_clinician', 'faculty', 'admin'))
+    (
+      public.app_role() IN ('student_clinician', 'faculty', 'admin') OR
+      (
+        public.app_role() = 'patient' AND
+        EXISTS (
+          SELECT 1 FROM public.patients p
+          WHERE p.id = treatment_records.patient_id
+            AND p.patient_user_id = auth.uid()
+            AND NOT COALESCE(p.is_deleted, false)
+        )
+      )
+    )
   );
 
 CREATE POLICY "treatment_records_write" ON public.treatment_records
@@ -533,7 +551,7 @@ CREATE POLICY "audit_ledger_faculty_select" ON public.clinical_audit_ledger
 -- 4. Cryptographic Record Hash & Audit Chain RPC Functions
 -- =========================================================================
 
--- Deterministic canonical hash calculation over clinical ODF payload
+-- Deterministic canonical JSON SHA-256 calculation matching JS computeCanonicalRecordHash()
 DROP FUNCTION IF EXISTS public.compute_canonical_odf_hash(jsonb);
 DROP FUNCTION IF EXISTS public.compute_canonical_odf_hash;
 CREATE OR REPLACE FUNCTION public.compute_canonical_odf_hash(p_odf jsonb)
@@ -542,31 +560,145 @@ LANGUAGE plpgsql
 IMMUTABLE
 AS $$
 DECLARE
-  v_canonical text;
+  v_odf jsonb := COALESCE(p_odf, '{}'::jsonb);
+  v_allergy_check text;
+  v_allergy_specify text;
+  v_birth_date text;
+  v_blood_pressure text;
+  v_chief_complaints text;
+  v_consent_clinician text;
+  v_consent_crop_json text;
+  v_consent_patient text;
+  v_eight_digit_id text;
+  v_hpi text;
+  v_name text;
+  v_odontogram_crop_json text;
+  v_past_history text;
+  v_raw_scan2_json text;
+  v_raw_scan_json text;
+  v_treatment_plan text;
+  v_sex text;
+  v_teeth_findings text;
+  v_diagnosis text;
+  v_canonical_json text;
 BEGIN
-  IF p_odf IS NULL THEN
-    RETURN encode(sha256('{}'::bytea), 'hex');
+  v_allergy_check := CASE
+    WHEN v_odf->'allergyCheck' = 'true'::jsonb THEN 'present'
+    WHEN v_odf->'allergyCheck' = 'false'::jsonb THEN ''
+    ELSE btrim(COALESCE(v_odf->>'allergyCheck', ''))
+  END;
+  v_allergy_specify := btrim(COALESCE(v_odf->>'allergySpecify', ''));
+  v_birth_date := btrim(COALESCE(v_odf->>'birthDate', ''));
+  v_blood_pressure := btrim(COALESCE(v_odf->>'bloodPressure', ''));
+
+  IF jsonb_typeof(v_odf->'chiefComplaints') = 'array' THEN
+    SELECT COALESCE('[' || string_agg(to_json(btrim(elem))::text, ',' ORDER BY ord) || ']', '[]')
+    INTO v_chief_complaints
+    FROM jsonb_array_elements_text(v_odf->'chiefComplaints') WITH ORDINALITY AS t(elem, ord)
+    WHERE btrim(elem) <> '';
+  ELSE
+    v_chief_complaints := '[]';
   END IF;
 
-  -- Canonical JSON extraction over core medical/consent fields
-  v_canonical := concat_ws('|',
-    COALESCE(p_odf->>'eightDigitId', ''),
-    COALESCE(p_odf->>'name', ''),
-    COALESCE(p_odf->>'sex', ''),
-    COALESCE(p_odf->>'birthDate', ''),
-    COALESCE(p_odf->>'chiefComplaints', ''),
-    COALESCE(p_odf->>'tentativeDiagnosis', ''),
-    COALESCE(p_odf->>'recommendedTreatmentPlan', ''),
-    COALESCE(p_odf->>'historyOfPresentIllness', ''),
-    COALESCE(p_odf->>'pastHistory', ''),
-    COALESCE(p_odf->>'teethFindings', ''),
-    COALESCE(p_odf->>'consentPatientName', ''),
-    COALESCE(p_odf->>'consentClinicianName', ''),
-    COALESCE(p_odf->>'rawScanUrl', ''),
-    COALESCE(p_odf->>'rawScanPage2Url', '')
+  v_consent_clinician := btrim(COALESCE(v_odf->>'consentClinicianName', ''));
+  v_consent_crop_json := CASE
+    WHEN NULLIF(btrim(COALESCE(v_odf->>'consentCropUrl', '')), '') IS NOT NULL
+    THEN to_json(btrim(v_odf->>'consentCropUrl'))::text
+    ELSE 'null'
+  END;
+  v_consent_patient := btrim(COALESCE(v_odf->>'consentPatientName', ''));
+
+  v_eight_digit_id := regexp_replace(COALESCE(v_odf->>'eightDigitId', ''), '\D', '', 'g');
+  IF v_eight_digit_id = '' THEN
+    v_eight_digit_id := '10000001';
+  ELSIF length(v_eight_digit_id) > 8 THEN
+    v_eight_digit_id := left(v_eight_digit_id, 8);
+  ELSE
+    v_eight_digit_id := lpad(v_eight_digit_id, 8, '0');
+  END IF;
+
+  v_hpi := btrim(COALESCE(v_odf->>'historyOfPresentIllness', ''));
+  v_name := btrim(COALESCE(v_odf->>'name', ''));
+  v_odontogram_crop_json := CASE
+    WHEN NULLIF(btrim(COALESCE(v_odf->>'odontogramCropUrl', '')), '') IS NOT NULL
+    THEN to_json(btrim(v_odf->>'odontogramCropUrl'))::text
+    ELSE 'null'
+  END;
+
+  IF jsonb_typeof(v_odf->'pastHistory') = 'object' THEN
+    SELECT COALESCE('{' || string_agg(to_json(kv.key)::text || ':' || to_json(kv.value)::text, ',' ORDER BY kv.key) || '}', '{}')
+    INTO v_past_history
+    FROM jsonb_each_text(v_odf->'pastHistory') AS kv(key, value)
+    WHERE kv.value IN ('present', 'none');
+  ELSE
+    v_past_history := '{}';
+  END IF;
+
+  v_raw_scan2_json := CASE
+    WHEN NULLIF(btrim(COALESCE(v_odf->>'rawScanPage2Url', '')), '') IS NOT NULL
+    THEN to_json(btrim(v_odf->>'rawScanPage2Url'))::text
+    ELSE 'null'
+  END;
+  v_raw_scan_json := CASE
+    WHEN NULLIF(btrim(COALESCE(v_odf->>'rawScanUrl', '')), '') IS NOT NULL
+    THEN to_json(btrim(v_odf->>'rawScanUrl'))::text
+    ELSE 'null'
+  END;
+
+  IF jsonb_typeof(v_odf->'recommendedTreatmentPlan') = 'array' THEN
+    SELECT COALESCE('[' || string_agg(to_json(btrim(elem))::text, ',' ORDER BY ord) || ']', '[]')
+    INTO v_treatment_plan
+    FROM jsonb_array_elements_text(v_odf->'recommendedTreatmentPlan') WITH ORDINALITY AS t(elem, ord)
+    WHERE btrim(elem) <> '';
+  ELSE
+    v_treatment_plan := '[]';
+  END IF;
+
+  v_sex := btrim(COALESCE(v_odf->>'sex', ''));
+
+  IF jsonb_typeof(v_odf->'teethFindings') = 'object' THEN
+    SELECT COALESCE('{' || string_agg(to_json(kv.key)::text || ':' || to_json(btrim(kv.value))::text, ',' ORDER BY kv.key) || '}', '{}')
+    INTO v_teeth_findings
+    FROM jsonb_each_text(v_odf->'teethFindings') AS kv(key, value)
+    WHERE btrim(kv.value) <> '';
+  ELSE
+    v_teeth_findings := '{}';
+  END IF;
+
+  IF jsonb_typeof(v_odf->'tentativeDiagnosis') = 'array' THEN
+    SELECT COALESCE('[' || string_agg(to_json(btrim(elem))::text, ',' ORDER BY ord) || ']', '[]')
+    INTO v_diagnosis
+    FROM jsonb_array_elements_text(v_odf->'tentativeDiagnosis') WITH ORDINALITY AS t(elem, ord)
+    WHERE btrim(elem) <> '';
+  ELSE
+    v_diagnosis := '[]';
+  END IF;
+
+  v_canonical_json := concat(
+    '{',
+    '"allergyCheck":', to_json(v_allergy_check)::text, ',',
+    '"allergySpecify":', to_json(v_allergy_specify)::text, ',',
+    '"birthDate":', to_json(v_birth_date)::text, ',',
+    '"bloodPressure":', to_json(v_blood_pressure)::text, ',',
+    '"chiefComplaints":', v_chief_complaints, ',',
+    '"consentClinicianName":', to_json(v_consent_clinician)::text, ',',
+    '"consentCropUrl":', v_consent_crop_json, ',',
+    '"consentPatientName":', to_json(v_consent_patient)::text, ',',
+    '"eightDigitId":', to_json(v_eight_digit_id)::text, ',',
+    '"historyOfPresentIllness":', to_json(v_hpi)::text, ',',
+    '"name":', to_json(v_name)::text, ',',
+    '"odontogramCropUrl":', v_odontogram_crop_json, ',',
+    '"pastHistory":', v_past_history, ',',
+    '"rawScanPage2Url":', v_raw_scan2_json, ',',
+    '"rawScanUrl":', v_raw_scan_json, ',',
+    '"recommendedTreatmentPlan":', v_treatment_plan, ',',
+    '"sex":', to_json(v_sex)::text, ',',
+    '"teethFindings":', v_teeth_findings, ',',
+    '"tentativeDiagnosis":', v_diagnosis,
+    '}'
   );
 
-  RETURN encode(sha256(v_canonical::bytea), 'hex');
+  RETURN encode(sha256(convert_to(v_canonical_json, 'UTF8')), 'hex');
 END;
 $$;
 
@@ -657,6 +789,9 @@ BEGIN
 END;
 $$;
 
+-- Revoke direct client access to audit logger: only server-side RPCs may append to the ledger
+REVOKE ALL ON FUNCTION public.log_clinical_audit_event(text, text, text, text, jsonb) FROM PUBLIC, anon, authenticated;
+
 -- Verification function to validate audit chain integrity across all records
 DROP FUNCTION IF EXISTS public.verify_clinical_audit_chain();
 DROP FUNCTION IF EXISTS public.verify_clinical_audit_chain;
@@ -725,8 +860,249 @@ END;
 $$;
 
 -- =========================================================================
--- 5. Atomic RPCs: Approval, Decline & Soft-Delete (No Browser Bypass)
+-- 5. Atomic RPCs: Submit ODF, Chairside Note, Approval, Decline & Soft-Delete
 -- =========================================================================
+
+-- Server-side ODF submission RPC (enforces clinician_id = auth.uid(), hashes & audits atomically)
+DROP FUNCTION IF EXISTS public.submit_pending_odf;
+CREATE OR REPLACE FUNCTION public.submit_pending_odf(
+  p_eight_digit_id text,
+  p_name text,
+  p_visit_date text,
+  p_clinician text,
+  p_submitted_by text,
+  p_procedure text,
+  p_notes text,
+  p_raw_scan_url text DEFAULT NULL,
+  p_raw_scan_page2_url text DEFAULT NULL,
+  p_odontogram_crop_url text DEFAULT NULL,
+  p_consent_crop_url text DEFAULT NULL,
+  p_odf_details jsonb DEFAULT '{}'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_caller_id uuid;
+  v_caller_role text;
+  v_caller_email text;
+  v_clean_id text;
+  v_clean_odf jsonb;
+  v_computed_hash text;
+  v_ocr_conf jsonb;
+  v_ocr_verified jsonb;
+  v_flagged_count integer := 0;
+  v_unverified_count integer := 0;
+  v_sub record;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: Sign-in required.';
+  END IF;
+
+  v_caller_role := public.app_role();
+  IF v_caller_role NOT IN ('student_clinician', 'faculty', 'admin') THEN
+    RAISE EXCEPTION 'Permission denied: Only clinic staff may submit ODF forms.';
+  END IF;
+
+  SELECT email INTO v_caller_email FROM public.profiles WHERE id = v_caller_id;
+
+  v_clean_id := regexp_replace(COALESCE(p_eight_digit_id, ''), '\D', '', 'g');
+  IF v_clean_id = '' THEN
+    v_clean_id := '10000001';
+  ELSIF length(v_clean_id) > 8 THEN
+    v_clean_id := left(v_clean_id, 8);
+  ELSE
+    v_clean_id := lpad(v_clean_id, 8, '0');
+  END IF;
+
+  -- Strip forged signature or client hash and normalize eightDigitId before hashing
+  v_clean_odf := (COALESCE(p_odf_details, '{}'::jsonb) - 'approvalSignature' - 'submittedRecordHash')
+    || jsonb_build_object(
+      'eightDigitId', v_clean_id,
+      'odontogramCropUrl', COALESCE(p_odontogram_crop_url, p_odf_details->>'odontogramCropUrl'),
+      'consentCropUrl', COALESCE(p_consent_crop_url, p_odf_details->>'consentCropUrl')
+    );
+
+  v_computed_hash := public.compute_canonical_odf_hash(v_clean_odf);
+  v_clean_odf := v_clean_odf || jsonb_build_object('submittedRecordHash', v_computed_hash);
+
+  INSERT INTO public.pending_approvals (
+    eight_digit_id,
+    name,
+    visit_date,
+    clinician,
+    submitted_by,
+    clinician_email,
+    clinician_id,
+    procedure,
+    notes,
+    status,
+    raw_scan_url,
+    raw_scan_page2_url,
+    odontogram_crop_url,
+    consent_crop_url,
+    odf_details
+  )
+  VALUES (
+    v_clean_id,
+    COALESCE(NULLIF(btrim(p_name), ''), 'Unnamed Patient'),
+    COALESCE(NULLIF(btrim(p_visit_date), ''), to_char(timezone('Asia/Manila', now()), 'MM/DD/YYYY')),
+    COALESCE(NULLIF(btrim(p_clinician), ''), 'Unassigned Clinician'),
+    COALESCE(NULLIF(btrim(p_submitted_by), ''), v_caller_email),
+    COALESCE(v_caller_email, NULLIF(btrim(p_submitted_by), '')),
+    v_caller_id,
+    COALESCE(NULLIF(btrim(p_procedure), ''), 'Oral Diagnosis Form (ODF)'),
+    COALESCE(p_notes, ''),
+    'pending',
+    COALESCE(p_raw_scan_url, v_clean_odf->>'rawScanUrl'),
+    COALESCE(p_raw_scan_page2_url, v_clean_odf->>'rawScanPage2Url'),
+    COALESCE(p_odontogram_crop_url, v_clean_odf->>'odontogramCropUrl'),
+    COALESCE(p_consent_crop_url, v_clean_odf->>'consentCropUrl'),
+    v_clean_odf
+  )
+  RETURNING * INTO v_sub;
+
+  -- Summarize OCR confidence telemetry server-side
+  v_ocr_conf := COALESCE(v_clean_odf->'ocrConfidence', '{}'::jsonb);
+  v_ocr_verified := COALESCE(v_clean_odf->'ocrVerifiedFields', '{}'::jsonb);
+  IF jsonb_typeof(v_ocr_conf) = 'object' THEN
+    SELECT
+      count(*) FILTER (WHERE (kv.value)::numeric < 0.85),
+      count(*) FILTER (WHERE (kv.value)::numeric < 0.85 AND NOT COALESCE((v_ocr_verified->>kv.key)::boolean, false))
+    INTO v_flagged_count, v_unverified_count
+    FROM jsonb_each_text(v_ocr_conf) AS kv(key, value)
+    WHERE kv.value ~ '^[0-9]+(\.[0-9]+)?$';
+  END IF;
+
+  PERFORM public.log_clinical_audit_event(
+    'ODF_SUBMITTED',
+    v_sub.eight_digit_id,
+    v_sub.id::text,
+    v_computed_hash,
+    jsonb_build_object(
+      'name', v_sub.name,
+      'procedure', v_sub.procedure,
+      'visitDate', v_sub.visit_date,
+      'ocrTelemetry', jsonb_build_object(
+        'engine', v_clean_odf->>'ocrEngine',
+        'flaggedCount', v_flagged_count,
+        'unverifiedCount', v_unverified_count
+      )
+    )
+  );
+
+  RETURN to_jsonb(v_sub);
+END;
+$$;
+
+-- Server-side chairside note RPC (allows student clinicians & faculty to record chairside notes + atomic audit log)
+DROP FUNCTION IF EXISTS public.add_chairside_clinical_note;
+CREATE OR REPLACE FUNCTION public.add_chairside_clinical_note(
+  p_patient_db_id uuid,
+  p_eight_digit_id text,
+  p_treatment_date date,
+  p_procedure_name text,
+  p_tooth_number text DEFAULT NULL,
+  p_diagnosis text DEFAULT '',
+  p_notes text DEFAULT '',
+  p_clinician text DEFAULT NULL,
+  p_dictation_meta jsonb DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_caller_id uuid;
+  v_caller_role text;
+  v_patient record;
+  v_clean_proc text;
+  v_tr record;
+  v_note_hash text;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Unauthorized: Sign-in required.';
+  END IF;
+
+  v_caller_role := public.app_role();
+  IF v_caller_role NOT IN ('student_clinician', 'faculty', 'admin') THEN
+    RAISE EXCEPTION 'Permission denied: Only clinic staff may add chairside clinical notes.';
+  END IF;
+
+  SELECT * INTO v_patient
+  FROM public.patients
+  WHERE id = p_patient_db_id AND NOT COALESCE(is_deleted, false);
+
+  IF v_patient IS NULL THEN
+    RAISE EXCEPTION 'Patient record not found.';
+  END IF;
+
+  v_clean_proc := COALESCE(NULLIF(btrim(p_procedure_name), ''), 'Chairside Clinical Progress Note');
+
+  INSERT INTO public.treatment_records (
+    patient_id,
+    dentist_id,
+    treatment_date,
+    procedure_name,
+    tooth_number,
+    diagnosis,
+    notes,
+    approval_signature
+  )
+  VALUES (
+    v_patient.id,
+    v_caller_id,
+    COALESCE(p_treatment_date, (timezone('Asia/Manila', now()))::date),
+    v_clean_proc,
+    NULLIF(btrim(COALESCE(p_tooth_number, '')), ''),
+    COALESCE(p_diagnosis, ''),
+    COALESCE(p_notes, ''),
+    NULL
+  )
+  RETURNING * INTO v_tr;
+
+  v_note_hash := encode(
+    sha256(
+      convert_to(
+        jsonb_build_object(
+          'eightDigitId', COALESCE(v_patient.eight_digit_id, p_eight_digit_id),
+          'recordId', v_tr.id::text,
+          'date', v_tr.treatment_date::text,
+          'procedureTitle', v_tr.procedure_name,
+          'toothNo', COALESCE(v_tr.tooth_number, ''),
+          'diagnosis', COALESCE(v_tr.diagnosis, ''),
+          'notes', COALESCE(v_tr.notes, ''),
+          'clinicianId', v_caller_id::text
+        )::text,
+        'UTF8'
+      )
+    ),
+    'hex'
+  );
+
+  PERFORM public.log_clinical_audit_event(
+    'CHAIRSIDE_NOTE_ADDED',
+    COALESCE(v_patient.eight_digit_id, p_eight_digit_id),
+    concat('tr_', v_tr.id::text),
+    v_note_hash,
+    jsonb_build_object(
+      'title', v_tr.procedure_name,
+      'toothNo', CASE WHEN v_tr.tooth_number IS NOT NULL THEN concat('Tooth #', v_tr.tooth_number) ELSE NULL END,
+      'hasHandoff', COALESCE(v_tr.diagnosis, '') LIKE '[HANDOFF]%',
+      'dictatedWithWhisper', p_dictation_meta IS NOT NULL,
+      'dictationMeta', p_dictation_meta,
+      'clinician', COALESCE(NULLIF(btrim(COALESCE(p_clinician, '')), ''), 'Clinic Staff')
+    )
+  );
+
+  RETURN to_jsonb(v_tr);
+END;
+$$;
 
 -- Server-side ODF approval RPC
 DROP FUNCTION IF EXISTS public.approve_pending_submission(text, text, text);
@@ -748,15 +1124,29 @@ DECLARE
   v_caller_role text;
   v_caller_id uuid;
   v_caller_name text;
+  v_caller_email text;
+  v_caller_employee_id text;
   v_sub record;
   v_computed_hash text;
   v_patient_id uuid;
   v_patient_row record;
   v_odf jsonb;
+  v_odf_signed jsonb;
+  v_patient_meta jsonb;
+  v_approval_signature jsonb;
+  v_audit_entry jsonb;
   v_proc text;
+  v_diagnosis_text text;
   v_first_name text;
   v_last_name text;
   v_name_parts text[];
+  v_dob date;
+  v_raw_dob text;
+  v_now timestamptz := timezone('utc'::text, now());
+  v_student_email text;
+  v_student_name text;
+  v_clinic_level text;
+  v_req_row record;
 BEGIN
   v_caller_id := auth.uid();
   IF v_caller_id IS NULL THEN
@@ -768,25 +1158,105 @@ BEGIN
     RAISE EXCEPTION 'Permission denied: Only faculty or administrators can approve submissions.';
   END IF;
 
-  SELECT full_name INTO v_caller_name FROM public.profiles WHERE id = v_caller_id;
+  SELECT full_name, email, employee_id
+  INTO v_caller_name, v_caller_email, v_caller_employee_id
+  FROM public.profiles
+  WHERE id = v_caller_id;
 
-  -- 1. Locate the specific pending approval submission
-  IF p_submission_id IS NOT NULL AND p_submission_id <> '' THEN
-    SELECT * INTO v_sub FROM public.pending_approvals WHERE id = p_submission_id::uuid FOR UPDATE;
+  -- 1. Locate the specific pending approval submission (must still be pending and not deleted)
+  IF p_submission_id IS NOT NULL AND btrim(p_submission_id) <> '' THEN
+    IF btrim(p_submission_id) !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      RAISE EXCEPTION 'Invalid submission identifier.';
+    END IF;
+    SELECT * INTO v_sub
+    FROM public.pending_approvals
+    WHERE id = btrim(p_submission_id)::uuid
+      AND status = 'pending'
+      AND NOT COALESCE(is_deleted, false)
+    FOR UPDATE;
   ELSE
-    SELECT * INTO v_sub FROM public.pending_approvals WHERE eight_digit_id = p_eight_digit_id AND status = 'pending' ORDER BY created_at DESC LIMIT 1 FOR UPDATE;
+    SELECT * INTO v_sub
+    FROM public.pending_approvals
+    WHERE eight_digit_id = p_eight_digit_id
+      AND status = 'pending'
+      AND NOT COALESCE(is_deleted, false)
+    ORDER BY created_at DESC
+    LIMIT 1
+    FOR UPDATE;
   END IF;
 
   IF v_sub IS NULL THEN
     RAISE EXCEPTION 'Pending submission not found or already processed.';
   END IF;
 
-  v_odf := COALESCE(v_sub.odf_details, '{}'::jsonb);
+  v_odf := COALESCE(v_sub.odf_details, '{}'::jsonb) - 'approvalSignature' - 'submittedRecordHash';
+  IF COALESCE(NULLIF(v_odf->>'eightDigitId', ''), '') = '' THEN
+    v_odf := v_odf || jsonb_build_object('eightDigitId', v_sub.eight_digit_id);
+  END IF;
 
-  -- 2. CRITICAL ADVISOR REQUIREMENT: Recalculate hash server-side rather than trusting browser
+  -- 2. CRITICAL REQUIREMENT: Recalculate canonical hash server-side rather than trusting browser p_record_hash
   v_computed_hash := public.compute_canonical_odf_hash(v_odf);
+  v_proc := COALESCE(NULLIF(btrim(v_sub.procedure), ''), 'Approved Oral Diagnosis Form (ODF)');
 
-  -- 3. Upsert or update patient record in public.patients
+  -- 3. Write atomic audit event first so ledgerSeq & chain_hash are embedded in approvalSignature
+  v_audit_entry := public.log_clinical_audit_event(
+    'FACULTY_APPROVED',
+    v_sub.eight_digit_id,
+    v_sub.id::text,
+    v_computed_hash,
+    jsonb_build_object(
+      'procedure', v_proc,
+      'approvedBy', COALESCE(NULLIF(btrim(v_caller_name), ''), v_caller_email, 'Faculty Evaluator'),
+      'clinician', v_sub.clinician,
+      'submissionId', v_sub.id
+    )
+  );
+
+  v_approval_signature := jsonb_build_object(
+    'signedBy', COALESCE(NULLIF(btrim(v_caller_name), ''), v_caller_email, 'Faculty Evaluator'),
+    'employeeId', v_caller_employee_id,
+    'signedAt', v_now,
+    'recordHash', v_computed_hash,
+    'ledgerSeq', (v_audit_entry->>'seq_num')::bigint,
+    'ledgerEntryHash', v_audit_entry->>'chain_hash'
+  );
+
+  v_odf_signed := v_odf || jsonb_build_object(
+    'submittedRecordHash', v_computed_hash,
+    'approvalSignature', v_approval_signature
+  );
+
+  -- Build patient metadata matching client normalizePatient() contract
+  v_patient_meta := jsonb_build_object(
+    'eightDigitId', v_sub.eight_digit_id,
+    'clinician', COALESCE(v_sub.clinician, 'Unassigned Clinician'),
+    'lastVisit', COALESCE(v_sub.visit_date, to_char(timezone('Asia/Manila', v_now), 'MM/DD/YYYY')),
+    'procedure', v_proc,
+    'notes', COALESCE(NULLIF(v_sub.notes, ''), v_odf->>'historyOfPresentIllness', ''),
+    'phone', COALESCE(NULLIF(v_odf->>'cellPhone', ''), v_odf->>'homeTel', ''),
+    'email', COALESCE(v_odf->>'email', ''),
+    'gender', COALESCE(v_odf->>'sex', ''),
+    'dateOfBirth', COALESCE(v_odf->>'birthDate', ''),
+    'age', COALESCE(v_odf->>'age', ''),
+    'homeAddress', COALESCE(v_odf->>'homeAddress', ''),
+    'approvalSignature', v_approval_signature,
+    'odfData', v_odf_signed
+  );
+
+  v_raw_dob := btrim(COALESCE(v_odf->>'birthDate', ''));
+  IF v_raw_dob ~ '^\d{4}-\d{2}-\d{2}$' THEN
+    v_dob := v_raw_dob::date;
+  ELSIF v_raw_dob ~ '^\d{2}/\d{2}/\d{4}$' THEN
+    BEGIN
+      v_dob := to_date(v_raw_dob, 'MM/DD/YYYY');
+    EXCEPTION WHEN OTHERS THEN
+      v_dob := NULL;
+    END;
+  ELSE
+    v_dob := NULL;
+  END IF;
+
+  -- 4. Upsert or update patient record in public.patients
   v_name_parts := string_to_array(trim(COALESCE(v_sub.name, v_odf->>'name', 'Unknown Patient')), ' ');
   v_first_name := v_name_parts[1];
   v_last_name := array_to_string(v_name_parts[2:], ' ');
@@ -798,12 +1268,17 @@ BEGIN
 
   IF v_patient_id IS NOT NULL THEN
     UPDATE public.patients
-    SET first_name = COALESCE(v_first_name, first_name),
-        last_name = COALESCE(v_last_name, last_name),
-        medical_history = v_odf::text,
+    SET first_name = COALESCE(NULLIF(v_first_name, ''), first_name),
+        last_name = COALESCE(NULLIF(v_last_name, ''), last_name),
+        email = COALESCE(NULLIF(btrim(v_odf->>'email'), ''), email),
+        phone = COALESCE(NULLIF(btrim(COALESCE(v_odf->>'cellPhone', v_odf->>'homeTel')), ''), phone),
+        gender = COALESCE(NULLIF(btrim(v_odf->>'sex'), ''), gender),
+        date_of_birth = COALESCE(v_dob, date_of_birth),
+        attending_clinician_id = COALESCE(v_sub.clinician_id, attending_clinician_id),
+        medical_history = v_patient_meta::text,
         latest_odf_scan_url = COALESCE(v_sub.raw_scan_url, latest_odf_scan_url),
         latest_odf_page2_url = COALESCE(v_sub.raw_scan_page2_url, latest_odf_page2_url),
-        updated_at = timezone('utc'::text, now()),
+        updated_at = v_now,
         is_deleted = false
     WHERE id = v_patient_id
     RETURNING * INTO v_patient_row;
@@ -811,6 +1286,11 @@ BEGIN
     INSERT INTO public.patients (
       first_name,
       last_name,
+      email,
+      phone,
+      gender,
+      date_of_birth,
+      attending_clinician_id,
       eight_digit_id,
       medical_history,
       latest_odf_scan_url,
@@ -819,8 +1299,13 @@ BEGIN
     VALUES (
       v_first_name,
       v_last_name,
+      NULLIF(btrim(COALESCE(v_odf->>'email', '')), ''),
+      NULLIF(btrim(COALESCE(v_odf->>'cellPhone', v_odf->>'homeTel', '')), ''),
+      NULLIF(btrim(COALESCE(v_odf->>'sex', '')), ''),
+      v_dob,
+      v_sub.clinician_id,
       v_sub.eight_digit_id,
-      v_odf::text,
+      v_patient_meta::text,
       v_sub.raw_scan_url,
       v_sub.raw_scan_page2_url
     )
@@ -828,8 +1313,16 @@ BEGIN
     v_patient_id := v_patient_row.id;
   END IF;
 
-  -- 4. Insert treatment record with faculty approval
-  v_proc := COALESCE(v_sub.procedure, 'Approved Oral Diagnosis Form (ODF)');
+  IF jsonb_typeof(v_odf->'tentativeDiagnosis') = 'array' THEN
+    SELECT NULLIF(string_agg(btrim(elem), '; '), '')
+    INTO v_diagnosis_text
+    FROM jsonb_array_elements_text(v_odf->'tentativeDiagnosis') AS elem
+    WHERE btrim(elem) <> '';
+  ELSE
+    v_diagnosis_text := NULLIF(btrim(COALESCE(v_odf->>'tentativeDiagnosis', '')), '');
+  END IF;
+
+  -- 5. Insert treatment record with faculty approval
   INSERT INTO public.treatment_records (
     patient_id,
     dentist_id,
@@ -845,35 +1338,67 @@ BEGIN
     v_patient_id,
     v_caller_id,
     v_proc,
-    COALESCE(v_odf->>'tentativeDiagnosis', 'ODF Documented'),
-    COALESCE(v_sub.notes, 'Faculty approved procedure and ODF documentation.'),
+    COALESCE(v_diagnosis_text, 'ODF Documented'),
+    COALESCE(NULLIF(v_sub.notes, ''), 'Faculty approved procedure and ODF documentation.'),
     v_sub.raw_scan_url,
     v_sub.raw_scan_url,
     v_sub.raw_scan_page2_url,
-    COALESCE(v_caller_name, 'Faculty Evaluator')
+    COALESCE(NULLIF(btrim(v_caller_name), ''), v_caller_email, 'Faculty Evaluator')
   );
 
-  -- 5. Mark pending approval as approved
+  -- 6. Mark pending approval as approved and persist signed ODF payload
   UPDATE public.pending_approvals
   SET status = 'approved',
+      odf_details = v_odf_signed,
       reviewed_by = v_caller_id,
-      reviewed_at = timezone('utc'::text, now()),
-      updated_at = timezone('utc'::text, now())
+      reviewed_at = v_now,
+      updated_at = v_now
   WHERE id = v_sub.id;
 
-  -- 6. Write atomic audit event (transactional, cannot be bypassed)
-  PERFORM public.log_clinical_audit_event(
-    'FACULTY_APPROVED',
-    v_sub.eight_digit_id,
-    v_sub.id::text,
-    v_computed_hash,
-    jsonb_build_object(
-      'procedure', v_proc,
-      'approvedBy', v_caller_name,
-      'clinician', v_sub.clinician,
-      'submissionId', v_sub.id
+  -- 7. Credit student clinical requirements when submitted by an identifiable student clinician
+  SELECT email, full_name INTO v_student_email, v_student_name
+  FROM public.profiles
+  WHERE id = v_sub.clinician_id;
+
+  v_student_email := COALESCE(NULLIF(btrim(v_student_email), ''), NULLIF(btrim(v_sub.submitted_by), ''), NULLIF(btrim(v_sub.clinician_email), ''));
+  IF v_student_email IS NOT NULL THEN
+    v_clinic_level := COALESCE(NULLIF(btrim(v_odf->>'clinicLevel'), ''), 'Clinic I');
+    SELECT * INTO v_req_row
+    FROM public.clinical_requirements
+    WHERE clinic_level = v_clinic_level
+      AND (lower(procedure_name) = lower(v_proc) OR procedure_code = 'ODF-01')
+    ORDER BY (lower(procedure_name) = lower(v_proc)) DESC
+    LIMIT 1;
+
+    INSERT INTO public.student_requirement_credits (
+      student_id,
+      student_email,
+      student_name,
+      requirement_id,
+      clinic_level,
+      procedure_category,
+      procedure_name,
+      patient_eight_digit_id,
+      patient_name,
+      approved_by,
+      approved_by_name,
+      approved_at
     )
-  );
+    VALUES (
+      v_sub.clinician_id,
+      v_student_email,
+      COALESCE(NULLIF(btrim(v_student_name), ''), split_part(v_student_email, '@', 1)),
+      v_req_row.id,
+      COALESCE(v_req_row.clinic_level, v_clinic_level),
+      COALESCE(v_req_row.procedure_category, 'Oral Diagnosis'),
+      COALESCE(v_req_row.procedure_name, v_proc),
+      v_sub.eight_digit_id,
+      COALESCE(v_sub.name, concat_ws(' ', v_first_name, v_last_name)),
+      v_caller_id,
+      COALESCE(NULLIF(btrim(v_caller_name), ''), v_caller_email, 'Faculty Evaluator'),
+      v_now
+    );
+  END IF;
 
   RETURN to_jsonb(v_patient_row);
 END;
@@ -910,15 +1435,21 @@ BEGIN
     RAISE EXCEPTION 'Permission denied: Only faculty or administrators can decline submissions.';
   END IF;
 
+  IF p_submission_id IS NULL OR btrim(p_submission_id) !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    RAISE EXCEPTION 'Invalid submission identifier.';
+  END IF;
+
   SELECT full_name INTO v_caller_name FROM public.profiles WHERE id = v_caller_id;
 
   SELECT * INTO v_sub
   FROM public.pending_approvals
-  WHERE id = p_submission_id::uuid
+  WHERE id = btrim(p_submission_id)::uuid
+    AND status = 'pending'
+    AND NOT COALESCE(is_deleted, false)
   FOR UPDATE;
 
   IF v_sub IS NULL THEN
-    RAISE EXCEPTION 'Pending submission not found.';
+    RAISE EXCEPTION 'Pending submission not found or already processed.';
   END IF;
 
   UPDATE public.pending_approvals
@@ -984,6 +1515,7 @@ BEGIN
   SELECT * INTO v_patient
   FROM public.patients
   WHERE eight_digit_id = p_eight_digit_id
+    AND NOT COALESCE(is_deleted, false)
   FOR UPDATE;
 
   IF v_patient IS NULL THEN
@@ -1031,7 +1563,7 @@ BEGIN
 END;
 $$;
 
--- Atomic Soft-Delete Records RPC
+-- Atomic Soft-Delete Records RPC (enforces patient ownership)
 DROP FUNCTION IF EXISTS public.soft_delete_treatment_records(uuid[], text);
 DROP FUNCTION IF EXISTS public.soft_delete_treatment_records(uuid[]);
 DROP FUNCTION IF EXISTS public.soft_delete_treatment_records;
@@ -1047,6 +1579,9 @@ AS $$
 DECLARE
   v_caller_id uuid;
   v_caller_role text;
+  v_patient_id uuid;
+  v_tr_count integer := 0;
+  v_pa_count integer := 0;
   v_now timestamptz := timezone('utc'::text, now());
 BEGIN
   v_caller_id := auth.uid();
@@ -1059,18 +1594,35 @@ BEGIN
     RAISE EXCEPTION 'Permission denied: Only faculty or administrators can delete treatment records.';
   END IF;
 
-  -- Soft-delete matching treatment records
-  UPDATE public.treatment_records
-  SET is_deleted = true,
-      deleted_at = v_now,
-      deleted_by = v_caller_id
-  WHERE id = ANY(p_record_ids);
+  SELECT id INTO v_patient_id
+  FROM public.patients
+  WHERE eight_digit_id = p_eight_digit_id
+  LIMIT 1;
 
-  -- Soft-delete matching pending approvals if any
+  -- Soft-delete matching treatment records belonging to this patient
+  IF v_patient_id IS NOT NULL THEN
+    UPDATE public.treatment_records
+    SET is_deleted = true,
+        deleted_at = v_now,
+        deleted_by = v_caller_id
+    WHERE id = ANY(p_record_ids)
+      AND patient_id = v_patient_id
+      AND NOT COALESCE(is_deleted, false);
+    GET DIAGNOSTICS v_tr_count = ROW_COUNT;
+  END IF;
+
+  -- Soft-delete matching pending approvals belonging to this patient
   UPDATE public.pending_approvals
   SET is_deleted = true,
       deleted_at = v_now
-  WHERE id = ANY(p_record_ids);
+  WHERE id = ANY(p_record_ids)
+    AND eight_digit_id = p_eight_digit_id
+    AND NOT COALESCE(is_deleted, false);
+  GET DIAGNOSTICS v_pa_count = ROW_COUNT;
+
+  IF (v_tr_count + v_pa_count) = 0 THEN
+    RAISE EXCEPTION 'No matching records found for patient %.', p_eight_digit_id;
+  END IF;
 
   -- Atomic audit log entry
   PERFORM public.log_clinical_audit_event(
@@ -1079,17 +1631,39 @@ BEGIN
     array_to_string(p_record_ids, ','),
     repeat('0', 64),
     jsonb_build_object(
-      'deletedRecordCount', array_length(p_record_ids, 1)
+      'deletedRecordCount', v_tr_count + v_pa_count
     )
   );
 
   RETURN jsonb_build_object(
     'success', true,
-    'deletedCount', array_length(p_record_ids, 1),
+    'deletedCount', v_tr_count + v_pa_count,
     'deletedAt', v_now
   );
 END;
 $$;
+
+-- Restrict RPC execution grants explicitly to authenticated clinic users
+REVOKE ALL ON FUNCTION public.submit_pending_odf(text, text, text, text, text, text, text, text, text, text, text, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.submit_pending_odf(text, text, text, text, text, text, text, text, text, text, text, jsonb) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.add_chairside_clinical_note(uuid, text, date, text, text, text, text, text, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.add_chairside_clinical_note(uuid, text, date, text, text, text, text, text, jsonb) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.approve_pending_submission(text, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.approve_pending_submission(text, text, text) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.decline_pending_submission(text, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.decline_pending_submission(text, jsonb) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.soft_delete_patient(text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.soft_delete_patient(text, text) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.soft_delete_treatment_records(uuid[], text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.soft_delete_treatment_records(uuid[], text) TO authenticated;
+
+REVOKE ALL ON FUNCTION public.verify_clinical_audit_chain() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.verify_clinical_audit_chain() TO authenticated;
 
 -- =========================================================================
 -- 6. Storage Bucket Configuration (Private Bucket)

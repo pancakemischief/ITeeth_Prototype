@@ -162,35 +162,6 @@ export async function computeCanonicalRecordHash(rawOdf = {}) {
 }
 
 /**
- * Logs an immutable clinical audit event via Supabase RPC `log_clinical_audit_event`.
- */
-export async function logClinicalAuditEvent(
-  actionType,
-  eightDigitId,
-  targetId,
-  recordHash,
-  recordSnapshot = {}
-) {
-  try {
-    const { data, error } = await supabase.rpc("log_clinical_audit_event", {
-      p_action_type: actionType,
-      p_eight_digit_id: to8DigitId(eightDigitId),
-      p_target_id: String(targetId || ""),
-      p_record_hash: recordHash || "",
-      p_record_snapshot: recordSnapshot,
-    });
-    if (error) {
-      console.warn("[Supabase Audit] log_clinical_audit_event error:", error.message);
-      return { success: false, error: sanitizeSupabaseError(error, "Audit log skipped.") };
-    }
-    return { success: true, data };
-  } catch (err) {
-    console.warn("[Supabase Audit] Unexpected error logging audit event:", err);
-    return { success: false, error: sanitizeSupabaseError(err, "Audit log skipped.") };
-  }
-}
-
-/**
  * Fetches recent entries from `clinical_audit_ledger` ordered newest-first.
  */
 export async function fetchClinicalAuditLedger(limit = 50) {
@@ -689,6 +660,7 @@ function normalizePatient(row, index = 1) {
     notes: meta.notes || (typeof row.medical_history === "string" ? row.medical_history : ""),
     odfData: meta.odfData || null,
     approvalSignature: meta.approvalSignature || meta.odfData?.approvalSignature || null,
+    patientUserId: row.patient_user_id || null,
   };
 }
 
@@ -1131,93 +1103,62 @@ export async function resolveOdfScanSignedUrl(pathOrUrl, expiresInSeconds = 300)
 }
 
 /**
- * Submit an Oral Diagnosis Form (ODF) or pending approval
- * Conforms strictly to schema in pending_approvals:
- * columns: id (text), name (text), visit_date (text), clinician (text), procedure (text), notes (text), status (text), odf_details (jsonb)
+ * Submit an Oral Diagnosis Form (ODF) or pending approval via atomic server-side RPC `submit_pending_odf`.
+ * Server enforces `clinician_id = auth.uid()`, computes the canonical SHA-256 hash, and writes `ODF_SUBMITTED` in one transaction.
  */
 export async function savePendingToSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
 
-  // Preserve image crops inside odf_details and compute canonical SHA-256 record hash
   const baseOdfDetails = {
     ...(item.odfDetails || item),
     odontogramCropUrl: item.odontogramCropUrl || item.odfDetails?.odontogramCropUrl || null,
     consentCropUrl: item.consentCropUrl || item.odfDetails?.consentCropUrl || null,
     eightDigitId: numericId,
   };
-  const recordHash = await computeCanonicalRecordHash(baseOdfDetails);
-  const odfDetails = {
-    ...baseOdfDetails,
-    submittedRecordHash: recordHash,
-  };
 
   const visitDate = item.visitDate || getTodayManilaDisplay();
-
   const clinician = item.clinician || UNASSIGNED_CLINICIAN;
-  const submittedBy = item.submittedBy || odfDetails.submittedBy || null;
+  const submittedBy = item.submittedBy || baseOdfDetails.submittedBy || null;
   const procedure = item.procedure || "Oral Diagnosis Form (ODF)";
   const notes = item.notes || item.historyOfPresentIllness || "";
-  const rawScanUrl = item.rawScanUrl || odfDetails.rawScanUrl || null;
-  const rawScanPage2Url = item.rawScanPage2Url || odfDetails.rawScanPage2Url || null;
-  const odontogramCropUrl = odfDetails.odontogramCropUrl;
-  const consentCropUrl = odfDetails.consentCropUrl;
+  const rawScanUrl = item.rawScanUrl || baseOdfDetails.rawScanUrl || null;
+  const rawScanPage2Url = item.rawScanPage2Url || baseOdfDetails.rawScanPage2Url || null;
+  const odontogramCropUrl = baseOdfDetails.odontogramCropUrl;
+  const consentCropUrl = baseOdfDetails.consentCropUrl;
 
   try {
-    const payload = {
-      eight_digit_id: numericId,
-      name: item.name || "Unnamed Patient",
-      visit_date: visitDate,
-      clinician,
-      submitted_by: submittedBy,
-      procedure,
-      notes,
-      status: "pending",
-      raw_scan_url: rawScanUrl,
-      raw_scan_page2_url: rawScanPage2Url,
-      odontogram_crop_url: odontogramCropUrl,
-      consent_crop_url: consentCropUrl,
-      odf_details: odfDetails,
-    };
+    const { data, error } = await supabase.rpc("submit_pending_odf", {
+      p_eight_digit_id: numericId,
+      p_name: item.name || "Unnamed Patient",
+      p_visit_date: visitDate,
+      p_clinician: clinician,
+      p_submitted_by: submittedBy,
+      p_procedure: procedure,
+      p_notes: notes,
+      p_raw_scan_url: rawScanUrl,
+      p_raw_scan_page2_url: rawScanPage2Url,
+      p_odontogram_crop_url: odontogramCropUrl,
+      p_consent_crop_url: consentCropUrl,
+      p_odf_details: baseOdfDetails,
+    });
 
-    const { data, error } = await supabase
-      .from("pending_approvals")
-      .insert(payload)
-      .select();
+    const insertedRow = Array.isArray(data) ? data[0] : data;
 
-    if (error || !data?.length) {
-      console.warn("[Supabase] savePending error:", error?.message || "No row returned");
+    if (error || !insertedRow) {
+      console.warn("[Supabase] submit_pending_odf RPC error:", error?.message || "No row returned");
       return {
         success: false,
         error: sanitizeSupabaseError(error, "Unable to submit ODF request."),
       };
     }
 
-    const savedPending = normalizePending(data[0]);
+    const savedPending = normalizePending(insertedRow);
     const localPending = getLocalPending();
     const updatedPending = [
       savedPending,
       ...localPending.filter((p) => String(p.submissionId || p.dbId || "") !== savedPending.submissionId),
     ];
     saveLocalPending(updatedPending);
-
-    const ocrSummary = summarizeOcrConfidence(odfDetails);
-
-    await logClinicalAuditEvent(
-      "ODF_SUBMITTED",
-      numericId,
-      savedPending.submissionId,
-      recordHash,
-      {
-        name: savedPending.name,
-        procedure: savedPending.procedure,
-        visitDate: savedPending.visitDate,
-        ocrTelemetry: {
-          engine: ocrSummary.engine,
-          flaggedCount: ocrSummary.flaggedCount,
-          unverifiedCount: ocrSummary.unverifiedCount,
-        },
-      }
-    );
 
     return {
       success: true,
@@ -1238,16 +1179,18 @@ export async function savePendingToSupabase(item) {
  */
 export async function approvePendingInSupabase(item) {
   const numericId = to8DigitId(item.id || item.eightDigitId);
+  const targetSubmissionId =
+    item.dbId && isUuid(item.dbId)
+      ? String(item.dbId)
+      : item.submissionId && isUuid(item.submissionId)
+      ? String(item.submissionId)
+      : "";
 
   try {
-    const recordHash =
-      item.odfDetails?.submittedRecordHash ||
-      (await computeCanonicalRecordHash(item.odfDetails || item));
-
     const { data, error } = await supabase.rpc("approve_pending_submission", {
-      p_submission_id: item.dbId ? String(item.dbId) : "",
+      p_submission_id: targetSubmissionId,
       p_eight_digit_id: numericId,
-      p_record_hash: recordHash,
+      p_record_hash: "",
     });
 
     const patientRow = Array.isArray(data) ? data[0] : data;
@@ -1331,7 +1274,8 @@ export async function approvePendingInSupabase(item) {
  * Decline a pending ODF request with optional structured faculty rubric feedback via atomic RPC
  */
 export async function declinePendingInSupabase(item, reviewFeedback = null) {
-  const targetId = item.dbId || item.submissionId || (isUuid(item.id) ? item.id : null);
+  const candidateId = item.dbId || item.submissionId || item.id;
+  const targetId = candidateId && isUuid(candidateId) ? String(candidateId) : null;
 
   if (!targetId) {
     return {
@@ -1377,23 +1321,13 @@ export async function declinePendingInSupabase(item, reviewFeedback = null) {
   }
 }
 
-async function computeNoteSha256(noteObj = {}) {
-  if (typeof crypto === "undefined" || !crypto.subtle) return "";
-  const encoded = new TextEncoder().encode(JSON.stringify(noteObj));
-  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 /**
- * Saves a chairside clinical progress note & optional shift handoff instructions.
- * Persists immediately to local session history, syncs to Supabase `treatment_records`,
- * and logs an immutable SHA-256 audit entry (`CHAIRSIDE_NOTE_ADDED`).
+ * Saves a chairside clinical progress note & optional shift handoff instructions
+ * via atomic server-side RPC `add_chairside_clinical_note` (persisting `treatment_records` + `CHAIRSIDE_NOTE_ADDED` audit entry).
  */
 export async function saveChairsideClinicalNote(patient, noteInput = {}) {
   if (!patient) {
-    return { success: false, error: "No patient selected.", data: null };
+    return { success: false, syncedToCloud: false, error: "No patient selected.", data: null };
   }
 
   const numericId = to8DigitId(patient.id || patient.eightDigitId);
@@ -1412,87 +1346,87 @@ export async function saveChairsideClinicalNote(patient, noteInput = {}) {
   const displayDate = getTodayManilaDisplay();
   const isoDate = getTodayManilaIso();
 
-  let noteRecord = {
-    id: `cs_${numericId}_${Date.now()}`,
-    patientId: numericId,
-    type: "chairside_note",
-    typeLabel: handoffInstructions ? "Chairside & Handoff Note" : "Chairside Note",
-    status: dictatedWithWhisper ? "Whisper.cpp Dictated" : "Recorded",
-    date: displayDate,
-    dateFormatted: formatDateParts(displayDate),
-    clinician,
-    toothNo: formattedTooth,
-    title: procedureTitle,
-    notes: progressNote,
-    diagnosis: handoffInstructions,
-    handoffInstructions,
-    summary: progressNote || handoffInstructions || procedureTitle,
-    dictationMeta,
-  };
-
-  saveLocalRecord(noteRecord);
-
-  let syncedToCloud = false;
-  if (patient.dbId && isUuid(patient.dbId)) {
-    try {
-      const dbDiagnosis = handoffInstructions ? `[HANDOFF] ${handoffInstructions}` : "";
-      const { data, error } = await supabase
-        .from("treatment_records")
-        .insert({
-          patient_id: patient.dbId,
-          treatment_date: isoDate,
-          procedure_name: procedureTitle,
-          tooth_number: rawTooth || null,
-          diagnosis: dbDiagnosis,
-          notes: progressNote,
-        })
-        .select();
-
-      if (!error && Array.isArray(data) && data[0]?.id) {
-        syncedToCloud = true;
-        const tempId = noteRecord.id;
-        noteRecord = {
-          ...noteRecord,
-          id: `tr_${data[0].id}`,
-        };
-        const currentLocal = getLocalRecords();
-        saveLocalRecordsList([
-          noteRecord,
-          ...currentLocal.filter((r) => r.id !== tempId && r.id !== noteRecord.id),
-        ]);
-      } else if (error) {
-        console.warn("[Supabase] Chairside note insert warning:", error.message);
+  try {
+    let patientDbId = patient.dbId && isUuid(patient.dbId) ? patient.dbId : null;
+    if (!patientDbId) {
+      const { data: foundPatient } = await supabase
+        .from("patients")
+        .select("id")
+        .eq("eight_digit_id", numericId)
+        .maybeSingle();
+      if (foundPatient?.id && isUuid(foundPatient.id)) {
+        patientDbId = foundPatient.id;
       }
-    } catch (err) {
-      console.warn("[Supabase] Unexpected error saving chairside note:", err);
     }
+
+    if (!patientDbId) {
+      return {
+        success: false,
+        syncedToCloud: false,
+        error: "Patient record must exist in the database before recording chairside clinical notes.",
+        data: null,
+      };
+    }
+
+    const dbDiagnosis = handoffInstructions ? `[HANDOFF] ${handoffInstructions}` : "";
+    const { data, error } = await supabase.rpc("add_chairside_clinical_note", {
+      p_patient_db_id: patientDbId,
+      p_eight_digit_id: numericId,
+      p_treatment_date: isoDate,
+      p_procedure_name: procedureTitle,
+      p_tooth_number: rawTooth || null,
+      p_diagnosis: dbDiagnosis,
+      p_notes: progressNote,
+      p_clinician: clinician,
+      p_dictation_meta: dictatedWithWhisper ? dictationMeta || { dictated: true } : null,
+    });
+
+    const insertedRow = Array.isArray(data) ? data[0] : data;
+
+    if (error || !insertedRow?.id) {
+      console.warn("[Supabase] add_chairside_clinical_note RPC error:", error?.message || "No row returned");
+      return {
+        success: false,
+        syncedToCloud: false,
+        error: sanitizeSupabaseError(error, "Unable to save chairside clinical note."),
+        data: null,
+      };
+    }
+
+    const noteRecord = {
+      id: `tr_${insertedRow.id}`,
+      patientId: numericId,
+      type: "chairside_note",
+      typeLabel: handoffInstructions ? "Chairside & Handoff Note" : "Chairside Note",
+      status: dictatedWithWhisper ? "Whisper.cpp Dictated" : "Recorded",
+      date: displayDate,
+      dateFormatted: formatDateParts(displayDate),
+      clinician,
+      toothNo: formattedTooth,
+      title: procedureTitle,
+      notes: progressNote,
+      diagnosis: handoffInstructions,
+      handoffInstructions,
+      summary: progressNote || handoffInstructions || procedureTitle,
+      dictationMeta,
+    };
+
+    saveLocalRecord(noteRecord);
+
+    return {
+      success: true,
+      syncedToCloud: true,
+      data: noteRecord,
+    };
+  } catch (err) {
+    console.warn("[Supabase] Unexpected error saving chairside note:", err);
+    return {
+      success: false,
+      syncedToCloud: false,
+      error: sanitizeSupabaseError(err, "Unable to save chairside clinical note."),
+      data: null,
+    };
   }
-
-  const noteHash = await computeNoteSha256({
-    eightDigitId: numericId,
-    recordId: noteRecord.id,
-    date: isoDate,
-    procedureTitle,
-    toothNo: rawTooth,
-    progressNote,
-    handoffInstructions,
-    clinician,
-  });
-
-  await logClinicalAuditEvent("CHAIRSIDE_NOTE_ADDED", numericId, noteRecord.id, noteHash, {
-    title: procedureTitle,
-    toothNo: formattedTooth,
-    hasHandoff: Boolean(handoffInstructions),
-    dictatedWithWhisper,
-    dictationMeta,
-    clinician,
-  });
-
-  return {
-    success: true,
-    syncedToCloud,
-    data: noteRecord,
-  };
 }
 
 /**

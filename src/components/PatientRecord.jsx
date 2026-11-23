@@ -264,9 +264,8 @@ export default function PatientRecord({
         const userEmail = (currentUser?.email || "").toLowerCase();
         const patientEmail = (p.email || "").toLowerCase();
         return (
-          patientEmail === userEmail ||
-          p.name.toLowerCase().includes("john doe") ||
-          to8DigitId(p.id) === "10000001"
+          (p.patientUserId && p.patientUserId === currentUser?.id) ||
+          Boolean(userEmail && patientEmail && patientEmail === userEmail)
         );
       }
       if (isStudent) {
