@@ -1327,35 +1327,34 @@ export async function approvePendingInSupabase(item) {
 /**
  * Decline a pending ODF request with optional structured faculty rubric feedback
  */
+/**
+ * Decline a pending ODF request with optional structured faculty rubric feedback via atomic RPC
+ */
 export async function declinePendingInSupabase(item, reviewFeedback = null) {
-  const numericId = to8DigitId(item.id || item.eightDigitId);
-  const reviewedAtIso = reviewFeedback?.reviewedAt || new Date().toISOString();
+  const targetId = item.dbId || item.submissionId || (isUuid(item.id) ? item.id : null);
+
+  if (!targetId) {
+    return {
+      success: false,
+      error: "Unable to decline submission: Unique submission ID is missing. Bulk decline by patient ID is prevented to protect other records.",
+    };
+  }
 
   try {
-    let query = supabase
-      .from("pending_approvals")
-      .update({
-        status: "declined",
-        review_feedback: reviewFeedback,
-        reviewed_by: reviewFeedback?.reviewerId || null,
-        reviewed_at: reviewedAtIso,
-      });
+    const { data, error } = await supabase.rpc("decline_pending_submission", {
+      p_submission_id: String(targetId),
+      p_review_feedback: reviewFeedback,
+    });
 
-    if (item.dbId) {
-      query = query.eq("id", item.dbId);
-    } else {
-      query = query.eq("eight_digit_id", numericId);
-    }
-
-    const { data, error } = await query.select();
-
-    if (error || !data?.length) {
-      console.warn("[Supabase] declinePending error:", error?.message || "No rows updated");
+    if (error || !data) {
+      console.warn("[Supabase] declinePending RPC error:", error?.message || "No data returned");
       return {
         success: false,
         error: sanitizeSupabaseError(error, "Unable to decline submission."),
       };
     }
+
+    const declinedItem = normalizePending(data);
 
     const targetDbId = item.dbId ? String(item.dbId) : null;
     const targetSubId = item.submissionId ? String(item.submissionId) : null;
@@ -1364,18 +1363,8 @@ export async function declinePendingInSupabase(item, reviewFeedback = null) {
       localPending.filter((p) => {
         if (targetDbId && p.dbId != null) return String(p.dbId) !== targetDbId;
         if (targetSubId && p.submissionId) return String(p.submissionId) !== targetSubId;
-        return to8DigitId(p.id) !== numericId;
+        return String(p.id) !== String(targetId);
       })
-    );
-
-    const declinedItem = normalizePending(data[0]);
-
-    await logClinicalAuditEvent(
-      "FACULTY_DECLINED",
-      numericId,
-      item.dbId || item.submissionId || numericId,
-      item.odfDetails?.submittedRecordHash || "",
-      { name: item.name, procedure: item.procedure, reviewFeedback }
     );
 
     return { success: true, data: declinedItem };
@@ -1688,7 +1677,7 @@ export async function fetchPatientHistoryRecords(patient) {
 }
 
 /**
- * Deletes one or more selected clinical/ODF records belonging to a patient.
+ * Deletes one or more selected clinical/ODF records belonging to a patient via atomic RPC.
  * Available exclusively to Dentistry Department Faculty and System Administrators.
  */
 export async function deleteSelectedPatientRecords(patient, recordsToDelete = []) {
@@ -1699,47 +1688,42 @@ export async function deleteSelectedPatientRecords(patient, recordsToDelete = []
   const targetIds = recordsToDelete.map((r) => (typeof r === "string" ? r : r.id)).filter(Boolean);
   const targetIdSet = new Set(targetIds);
 
-  // Verify every remote Supabase deletion succeeds BEFORE modifying local blocklists or caches
-  for (const record of recordsToDelete) {
-    const id = typeof record === "string" ? record : record?.id;
-    const recordDbId = typeof record === "object" && record !== null ? record.dbId : null;
-    if (!id) continue;
+  // Extract database UUIDs for server-side soft delete
+  const dbUuids = recordsToDelete
+    .map((record) => {
+      const id = typeof record === "string" ? record : record?.id;
+      const recordDbId = typeof record === "object" && record !== null ? record.dbId : null;
+      if (recordDbId && isUuid(recordDbId)) return recordDbId;
+      if (id?.startsWith("tr_")) {
+        const raw = id.slice(3);
+        if (isUuid(raw)) return raw;
+      }
+      if (id?.startsWith("appr_")) {
+        const raw = id.split("_")[1];
+        if (isUuid(raw)) return raw;
+      }
+      if (isUuid(id)) return id;
+      return null;
+    })
+    .filter(Boolean);
 
+  if (dbUuids.length > 0) {
     try {
-      if (id.startsWith("tr_")) {
-        const dbRecordId = id.slice(3);
-        const { error } = await supabase.from("treatment_records").delete().eq("id", dbRecordId);
-        if (error) {
-          return {
-            success: false,
-            deletedIds: [],
-            error: sanitizeSupabaseError(error, "Delete failed."),
-          };
-        }
-      } else if (id.startsWith("appr_")) {
-        const apprId = id.split("_")[1];
-        if (apprId) {
-          const { error } = await supabase.from("pending_approvals").delete().eq("id", apprId);
-          if (error) {
-            return {
-              success: false,
-              deletedIds: [],
-              error: sanitizeSupabaseError(error, "Delete failed."),
-            };
-          }
-        }
-      } else if (recordDbId) {
-        const { error } = await supabase.from("pending_approvals").delete().eq("id", recordDbId);
-        if (error) {
-          return {
-            success: false,
-            deletedIds: [],
-            error: sanitizeSupabaseError(error, "Delete failed."),
-          };
-        }
+      const { error } = await supabase.rpc("soft_delete_treatment_records", {
+        p_record_ids: dbUuids,
+        p_eight_digit_id: numericId,
+      });
+
+      if (error) {
+        console.warn("[Supabase] soft_delete_treatment_records RPC error:", error.message);
+        return {
+          success: false,
+          deletedIds: [],
+          error: sanitizeSupabaseError(error, "Delete failed."),
+        };
       }
     } catch (err) {
-      console.warn("[Supabase] Error deleting record:", id, err);
+      console.warn("[Supabase] Error deleting records via RPC:", err);
       return {
         success: false,
         deletedIds: [],
@@ -1765,74 +1749,33 @@ export async function deleteSelectedPatientRecords(patient, recordsToDelete = []
   });
   saveLocalPending(nextLocalPending);
 
-  await logClinicalAuditEvent(
-    "RECORD_DELETED",
-    numericId,
-    targetIds.join(","),
-    "",
-    { deletedCount: targetIds.length }
-  );
-
   return { success: true, deletedIds: targetIds };
 }
 
 /**
- * Deletes an entire patient record along with all associated history and pending ODF submissions.
+ * Deletes an entire patient record along with all associated history and pending ODF submissions
+ * via atomic server-side RPC (preventing partial deletions and auditing the event in one transaction).
  * Available exclusively to Dentistry Department Faculty and System Administrators.
  */
 export async function deleteEntirePatient(patient) {
   if (!patient) return { success: false, error: "No patient selected." };
   const numericId = to8DigitId(patient.id || patient.eightDigitId);
 
-  // Verify all remote Supabase deletions succeed BEFORE adding to blocklist or mutating caches
   try {
-    const { error: pendingError } = await supabase
-      .from("pending_approvals")
-      .delete()
-      .eq("eight_digit_id", numericId);
-    if (pendingError) {
+    const { error } = await supabase.rpc("soft_delete_patient", {
+      p_eight_digit_id: numericId,
+      p_reason: "Authorized Faculty/Admin Deletion",
+    });
+
+    if (error) {
+      console.warn("[Supabase] soft_delete_patient RPC error:", error.message);
       return {
         success: false,
-        error: sanitizeSupabaseError(pendingError, "Delete failed."),
-      };
-    }
-
-    if (patient.dbId && isUuid(patient.dbId)) {
-      const { error: treatmentError } = await supabase
-        .from("treatment_records")
-        .delete()
-        .eq("patient_id", patient.dbId);
-      if (treatmentError) {
-        return {
-          success: false,
-          error: sanitizeSupabaseError(treatmentError, "Delete failed."),
-        };
-      }
-
-      const { error: patientByIdError } = await supabase
-        .from("patients")
-        .delete()
-        .eq("id", patient.dbId);
-      if (patientByIdError) {
-        return {
-          success: false,
-          error: sanitizeSupabaseError(patientByIdError, "Delete failed."),
-        };
-      }
-    }
-
-    const { error: patientByNumError } = await supabase
-      .from("patients")
-      .delete()
-      .eq("eight_digit_id", numericId);
-    if (patientByNumError) {
-      return {
-        success: false,
-        error: sanitizeSupabaseError(patientByNumError, "Delete failed."),
+        error: sanitizeSupabaseError(error, "Delete failed."),
       };
     }
   } catch (err) {
-    console.warn("[Supabase] Error deleting patient:", numericId, err);
+    console.warn("[Supabase] Error executing soft_delete_patient RPC:", numericId, err);
     return {
       success: false,
       error: sanitizeSupabaseError(err, "Delete failed."),
@@ -1851,14 +1794,6 @@ export async function deleteEntirePatient(patient) {
 
   const nextPending = getLocalPending().filter((p) => to8DigitId(p.eightDigitId || p.id) !== numericId);
   saveLocalPending(nextPending);
-
-  await logClinicalAuditEvent(
-    "PATIENT_DELETED",
-    numericId,
-    numericId,
-    "",
-    { name: patient.name }
-  );
 
   return { success: true, patientId: numericId };
 }

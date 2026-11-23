@@ -5,12 +5,25 @@ const env =
   (typeof process !== "undefined" && process.env) ||
   {};
 
-const supabaseUrl =
-  env.VITE_SUPABASE_URL || "https://morevxxzynyatbeabwxk.supabase.co";
+const supabaseUrl = env.VITE_SUPABASE_URL;
+const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY;
 
-const supabaseAnonKey =
-  env.VITE_SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1uc3FncGl1cGdlbGtrbWtueWV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAzMDQ0NTYsImV4cCI6MjEwNTg4MDQ1Nn0.BqvUBfHQHxp5rvs6PG2kD6aW6k--tTlZBY4gp3b6pXs";
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error(
+    "[Supabase] Missing environment variables. Ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set in your .env file."
+  );
+}
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export const supabase = createClient(
+  supabaseUrl || "https://placeholder-project.supabase.co",
+  supabaseAnonKey || "placeholder-anon-key",
+  {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  }
+);
+
 export default supabase;

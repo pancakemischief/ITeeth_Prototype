@@ -1,4 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { supabase } from "./supabaseClient.js";
+
+async function getAuthHeaders() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 /**
  * Downsample Float32Array audio samples to target sample rate (16kHz for whisper.cpp).
@@ -103,8 +114,10 @@ export async function transcribeAudioWithWhisper(audioBlob, options = {}) {
   if (options.field) formData.append("field", options.field);
   if (options.prompt) formData.append("prompt", options.prompt);
 
+  const authHeaders = await getAuthHeaders();
   const response = await fetch("/api/stt/whisper", {
     method: "POST",
+    headers: { ...authHeaders },
     body: formData,
   });
 

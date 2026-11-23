@@ -57,60 +57,133 @@ const PAST_HISTORY_LINE_RX =
  * PaddleOCR line boxes so `parseAzurePage1ToForm` and `parseAzurePage2ToForm`
  * populate fields reliably without Azure Document Intelligence.
  */
-function extractStructuredDataFromLines(lines) {
+function extractStructuredDataFromLines(lines, pageNumber = 1) {
   const lineStrings = [];
   const keyValuePairs = [];
+  const fields = {};
   const pastHistoryRows = [];
+  const allTokens = [];
 
   for (const line of lines) {
     const tokens = (line || [])
-      .map((item) => ({
-        text: String(item?.text || "").trim(),
-        confidence: typeof item?.confidence === "number" ? item.confidence : null,
-        box: item?.box || { x: 0, y: 0, width: 0, height: 0 },
-      }))
+      .map((item) => {
+        const box = item?.box || { x: 0, y: 0, width: 0, height: 0 };
+        return {
+          text: String(item?.text || "").trim(),
+          confidence: typeof item?.confidence === "number" ? item.confidence : 0.85,
+          box,
+          cx: box.x + box.width / 2,
+          cy: box.y + box.height / 2,
+          right: box.x + box.width,
+        };
+      })
       .filter((t) => t.text.length > 0);
 
     if (tokens.length === 0) continue;
 
     const lineText = tokens.map((t) => t.text).join(" ");
     lineStrings.push(lineText);
+    allTokens.push(...tokens);
 
-    // 1. Extract inline "Label: Value" or adjacent label + value tokens on the same row
-    for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i];
-      const inlineMatch = tok.text.match(
-        /^(Name|Home\s*Address|Birth\s*Date|Birthdate|Age|Sex|Ht\.?|Height|Wt\.?|Weight|Civil\s*Status|Home\s*Tel\.?\s*No\.?|Cell\s*Phone\s*No\.?|Nationality|Occupation|Religion|Allergy,?\s*specify|Other\s*Il+nesses|Medications\s*currently\s*taking|Blood\s*Pressure|BP|Pulse\s*Rate|Respiratory\s*Rate|Temperature|Radiographic\s*Interpretation|Examined\s*by|Clinic\s*Level|C\.?I\.?'?s?\s*Remarks)\s*[:-]\s*(.+)$/i
-      );
-
-      if (inlineMatch) {
-        const key = inlineMatch[1].trim();
-        const val = inlineMatch[2].replace(/^_+|_+$/g, "").trim();
-        if (val && !KNOWN_LABELS_RX.test(val)) {
-          keyValuePairs.push({ key, value: val, confidence: tok.confidence });
-        }
-        continue;
-      }
-
-      const labelOnlyMatch = tok.text.match(KNOWN_LABELS_RX);
-      if (labelOnlyMatch && i + 1 < tokens.length) {
-        const nextTok = tokens[i + 1];
-        if (!KNOWN_LABELS_RX.test(nextTok.text)) {
-          const cleanVal = nextTok.text.replace(/^_+|_+$/g, "").trim();
-          if (cleanVal) {
-            keyValuePairs.push({
-              key: labelOnlyMatch[1].trim(),
-              value: cleanVal,
-              confidence: nextTok.confidence,
-            });
-          }
-        }
-      }
-    }
-
-    // 2. Preserve Past History grid rows as structured table cells (adjacent marks stay next to conditions)
     if (PAST_HISTORY_LINE_RX.test(lineText)) {
       pastHistoryRows.push(tokens.map((t) => t.text));
+    }
+  }
+
+  // 1. Spatial 2D Key-Value Pairing (handles handwriting slightly above/below label baseline)
+  const labelTokens = allTokens.filter((t) => KNOWN_LABELS_RX.test(t.text));
+  const valueCandidates = allTokens.filter((t) => !KNOWN_LABELS_RX.test(t.text));
+
+  for (const labelTok of labelTokens) {
+    // Check if value is already inline inside the same box (e.g., "Age: 24")
+    const inlineMatch = labelTok.text.match(/^([^:-]+)\s*[:-]\s*(.+)$/);
+    if (inlineMatch && inlineMatch[2].trim()) {
+      keyValuePairs.push({
+        key: inlineMatch[1].trim(),
+        value: inlineMatch[2].replace(/^_+|_+$/g, "").trim(),
+        confidence: labelTok.confidence,
+      });
+      continue;
+    }
+
+    const cleanKey = labelTok.text.match(KNOWN_LABELS_RX)?.[1]?.trim() || labelTok.text;
+    const yTolerance = Math.max(22, labelTok.box.height * 1.4);
+
+    // Find tokens to the right of this label on roughly the same horizontal band,
+    // stopping before the next label on that same band
+    const nextLabelOnSameRow = labelTokens
+      .filter(
+        (other) =>
+          other !== labelTok &&
+          other.box.x > labelTok.right &&
+          Math.abs(other.cy - labelTok.cy) <= yTolerance
+      )
+      .sort((a, b) => a.box.x - b.box.x)[0];
+
+    const maxRightX = nextLabelOnSameRow ? nextLabelOnSameRow.box.x : Infinity;
+
+    const matchedValues = valueCandidates
+      .filter(
+        (cand) =>
+          cand.box.x >= labelTok.right - 12 &&
+          cand.cx < maxRightX &&
+          Math.abs(cand.cy - labelTok.cy) <= yTolerance
+      )
+      .sort((a, b) => a.box.x - b.box.x);
+
+    if (matchedValues.length > 0) {
+      const joinedVal = matchedValues
+        .map((v) => v.text.replace(/^_+|_+$/g, "").trim())
+        .filter(Boolean)
+        .join(" ");
+
+      if (joinedVal) {
+        keyValuePairs.push({
+          key: cleanKey,
+          value: joinedVal,
+          confidence: matchedValues[0].confidence,
+        });
+      }
+    }
+  }
+
+  // 2. Page 2: Extract numbered Tentative Diagnosis & Recommended Treatment Plan items
+  if (pageNumber === 2) {
+    const diagHeader = allTokens.find((t) => /Tentative\s*Diagnosis/i.test(t.text));
+    const planHeader = allTokens.find((t) => /Recommended\s*Treatment\s*Plan/i.test(t.text));
+
+    if (diagHeader) {
+      const diagItems = valueCandidates
+        .filter(
+          (t) =>
+            t.cy > diagHeader.cy &&
+            t.cy < diagHeader.cy + 260 &&
+            (!planHeader || t.cx < planHeader.box.x - 10)
+        )
+        .sort((a, b) => a.cy - b.cy)
+        .slice(0, 6);
+
+      diagItems.forEach((item, idx) => {
+        const cleaned = item.text.replace(/^[1-6][.)]\s*/, "").trim();
+        if (cleaned) fields[`TentativeDiagnosis${idx + 1}`] = { value: cleaned };
+      });
+    }
+
+    if (planHeader) {
+      const planItems = valueCandidates
+        .filter(
+          (t) =>
+            t.cy > planHeader.cy &&
+            t.cy < planHeader.cy + 260 &&
+            t.box.x >= planHeader.box.x - 20
+        )
+        .sort((a, b) => a.cy - b.cy)
+        .slice(0, 6);
+
+      planItems.forEach((item, idx) => {
+        const cleaned = item.text.replace(/^[1-6][.)]\s*/, "").trim();
+        if (cleaned) fields[`RecommendedTreatmentPlan${idx + 1}`] = { value: cleaned };
+      });
     }
   }
 
@@ -130,6 +203,7 @@ function extractStructuredDataFromLines(lines) {
   return {
     content: lineStrings.join("\n"),
     lineStrings,
+    fields,
     keyValuePairs,
     tables,
   };

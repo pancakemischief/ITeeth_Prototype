@@ -3096,7 +3096,7 @@ export default function OralDiagnosisForm({
                   <div className="ceu-privacy-statement-box">
                     <h5>DATA PRIVACY ACT STATEMENT POLICY</h5>
                     <p>
-                      Centro Escolar University is committed to respect and value the privacy rights of individuals. We will ensure that all personal data are protected and processed in accordance wih Repluc Act No. 10171 or the Data Privacy Act of 2012 and its implementing Rules and Regulations. We recognize the confidentiality of personal data and adhere to the general principles of transparency, legitimate purpose, and proportionality. A cope of our full Data Privacy Notice may be obtained from the Office of the Dean and Section Bulletin Board of the School of Dentistry.
+                      Centro Escolar University is committed to respecting and protecting the privacy rights of individuals in accordance with Republic Act No. 10173 (Data Privacy Act of 2012) and its Implementing Rules and Regulations. We adhere to the core principles of transparency, legitimate purpose, and proportionality. In submitting digital diagnostic records and Oral Diagnosis Forms (ODFs), patients and clinicians are informed that automated image recognition and text digitization may involve secure processing via certified cloud infrastructure (Microsoft Azure Document Intelligence, hosted in the Southeast Asia region) under strict confidentiality and encryption standards. A copy of our full Data Privacy Notice may be obtained from the Office of the Dean and Clinic Administrative Board of the School of Dentistry.
                     </p>
                   </div>
                 </section>

@@ -1,3 +1,15 @@
+import { supabase } from "./supabaseClient.js";
+
+async function getAuthHeaders() {
+  try {
+    const { data } = await supabase.auth.getSession();
+    const token = data?.session?.access_token;
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Azure AI Document Intelligence client & CEU Makati Oral Diagnosis Form (ODF) mapper.
  * Supports both:
@@ -167,8 +179,10 @@ export async function analyzeOdfWithAzure(blob, pageNumber = 1, fileName = `odf_
   formData.append("document", file);
   formData.append("pageNumber", String(pageNumber));
 
+  const authHeaders = await getAuthHeaders();
   const response = await fetch("/api/ocr/azure-odf", {
     method: "POST",
+    headers: { ...authHeaders },
     body: formData,
   });
 
@@ -205,8 +219,10 @@ export async function analyzeOdfWithPaddle(
   formData.append("document", file);
   formData.append("pageNumber", String(pageNumber));
 
+  const authHeaders = await getAuthHeaders();
   const response = await fetch("/api/ocr/paddle-odf", {
     method: "POST",
+    headers: { ...authHeaders },
     body: formData,
   });
 

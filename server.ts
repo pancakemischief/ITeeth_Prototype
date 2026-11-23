@@ -2,8 +2,9 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
-import type { Request, Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
+import { createClient } from "@supabase/supabase-js";
 import DocumentIntelligence, {
   getLongRunningPoller,
   isUnexpected,
@@ -27,6 +28,110 @@ const upload = multer({
     fileSize: 20 * 1024 * 1024, // 20 MB max scan size
   },
 });
+
+const supabaseUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || "").trim();
+const supabaseAnonKey = (process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "").trim();
+const supabaseServer = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
+
+/**
+ * Authentication Middleware: Enforces that requests contain a valid Supabase JWT Bearer token.
+ * Prevents unauthorized public access to server-side OCR and STT endpoints.
+ */
+async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    res.status(401).json({
+      error: "Unauthorized: Missing authentication Bearer token. Please sign in to I-Teeth.",
+    });
+    return;
+  }
+
+  const token = authHeader.split(" ")[1]?.trim();
+  if (!token) {
+    res.status(401).json({ error: "Unauthorized: Malformed Authorization token." });
+    return;
+  }
+
+  if (!supabaseServer) {
+    res.status(503).json({ error: "Authentication service is unconfigured on the server." });
+    return;
+  }
+
+  try {
+    const { data, error } = await supabaseServer.auth.getUser(token);
+    if (error || !data?.user) {
+      res.status(401).json({
+        error: "Unauthorized: Invalid or expired session token. Please sign in again.",
+      });
+      return;
+    }
+    (req as any).user = data.user;
+    next();
+  } catch {
+    res.status(401).json({ error: "Unauthorized: Failed to authenticate session token." });
+  }
+}
+
+/**
+ * Sliding-window rate limiter to protect Azure Document Intelligence credits
+ * and local CPU audio transcription threads from resource exhaustion.
+ */
+interface RateLimitBucket {
+  count: number;
+  resetAt: number;
+}
+
+function createRateLimiter(windowMs: number, maxRequests: number, resourceName: string) {
+  const store = new Map<string, RateLimitBucket>();
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, bucket] of store.entries()) {
+      if (now > bucket.resetAt) {
+        store.delete(key);
+      }
+    }
+  }, 2 * 60 * 1000);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const key =
+      (req as any).user?.id ||
+      req.ip ||
+      req.headers["x-forwarded-for"] ||
+      req.socket.remoteAddress ||
+      "client";
+    const now = Date.now();
+    const bucket = store.get(String(key));
+
+    if (!bucket || now > bucket.resetAt) {
+      store.set(String(key), { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+
+    if (bucket.count >= maxRequests) {
+      const retryAfterSec = Math.ceil((bucket.resetAt - now) / 1000);
+      res.set("Retry-After", String(retryAfterSec));
+      res.status(429).json({
+        error: `Rate limit exceeded for ${resourceName}. Maximum ${maxRequests} requests per minute allowed. Try again in ${retryAfterSec}s.`,
+      });
+      return;
+    }
+
+    bucket.count += 1;
+    next();
+  };
+}
+
+const ocrRateLimiter = createRateLimiter(60 * 1000, 30, "OCR document intelligence");
+const sttRateLimiter = createRateLimiter(60 * 1000, 60, "Whisper dictation transcription");
+
+function extractAzureRegion(endpoint: string): string {
+  const match = endpoint.match(/https:\/\/([^.]+)\.cognitiveservices\.azure\.com/) ||
+                endpoint.match(/https:\/\/([^.]+)\.api\.cognitive\.microsoft\.com/);
+  return match ? match[1] : "southeastasia";
+}
+
+
 
 function isAzureConfigured(): {
   configured: boolean;
@@ -187,11 +292,19 @@ async function startServer() {
 
   // Check OCR provider readiness without exposing credentials
   app.get("/api/ocr/status", (_req: Request, res: Response) => {
-    const { configured, modelId } = isAzureConfigured();
+    const { configured, endpoint, modelId } = isAzureConfigured();
+    const azureRegion = configured ? extractAzureRegion(endpoint) : "southeastasia";
     res.json({
       provider: configured ? "azure-document-intelligence" : "paddle-ocr-fallback",
       configured,
       azureConfigured: configured,
+      azureRegion,
+      dataPrivacyCompliance: {
+        regulation: "Republic Act No. 10173 (Data Privacy Act of 2012)",
+        crossBorderTransfer: configured ? "Azure AI Document Intelligence (Cloud OCR)" : "None (Local On-Premises ONNX)",
+        cloudRegion: azureRegion,
+        purpose: "Automated Clinical Oral Diagnosis Form digitization and handwriting extraction",
+      },
       fallbackProvider: "paddle-ocr",
       fallbackModelId: PADDLE_MODEL_ID,
       modelId: configured ? modelId : PADDLE_MODEL_ID,
@@ -201,6 +314,8 @@ async function startServer() {
   // Analyze uploaded ODF scan (Page 1, Page 2, or 2-page PDF) via Azure AI Document Intelligence
   app.post(
     "/api/ocr/azure-odf",
+    requireAuth,
+    ocrRateLimiter,
     upload.single("document"),
     async (req: Request, res: Response) => {
       const { configured, endpoint, key, modelId } = isAzureConfigured();
@@ -254,6 +369,8 @@ async function startServer() {
           configured: true,
           provider: "azure-document-intelligence",
           modelId,
+          region: extractAzureRegion(endpoint),
+          dataPrivacyDisclosure: "Processed via Microsoft Azure Document Intelligence in compliance with RA 10173.",
           requestedPage: pageNumber,
           content: analyzeResult?.content || "",
           fields,
@@ -278,6 +395,8 @@ async function startServer() {
   // Fallback OCR via server-side PaddleOCR (PP-OCRv5 English ONNX Runtime)
   app.post(
     "/api/ocr/paddle-odf",
+    requireAuth,
+    ocrRateLimiter,
     upload.single("document"),
     async (req: Request, res: Response) => {
       if (!req.file || !req.file.buffer) {
@@ -322,6 +441,8 @@ async function startServer() {
   // Transcribe recorded clinical voice dictation locally via whisper.cpp
   app.post(
     "/api/stt/whisper",
+    requireAuth,
+    sttRateLimiter,
     upload.single("audio"),
     async (req: Request, res: Response) => {
       if (!req.file || !req.file.buffer) {
