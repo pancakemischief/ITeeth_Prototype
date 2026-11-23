@@ -33,7 +33,6 @@ ALTER TABLE public.profiles
 CREATE INDEX IF NOT EXISTS idx_profiles_role_status ON public.profiles (role, status);
 
 -- Helper function to fetch caller role safely (Security Definer avoids infinite recursion)
-DROP FUNCTION IF EXISTS public.app_role();
 CREATE OR REPLACE FUNCTION public.app_role()
 RETURNS text
 LANGUAGE sql
@@ -45,7 +44,6 @@ AS $$
 $$;
 
 -- Helper function to fetch caller approval status
-DROP FUNCTION IF EXISTS public.app_status();
 CREATE OR REPLACE FUNCTION public.app_status()
 RETURNS text
 LANGUAGE sql
@@ -1699,14 +1697,20 @@ CREATE POLICY "Allow clinic staff reads from odf-scans"
 -- =========================================================================
 
 INSERT INTO public.clinical_requirements (clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
-VALUES
-  ('Clinic I', 'Restorative', 'REST-01', 'Class I Amalgam/Composite Restoration', 10, 'cases'),
-  ('Clinic I', 'Restorative', 'REST-02', 'Class II Amalgam/Composite Restoration', 8, 'cases'),
-  ('Clinic I', 'Periodontics', 'PERIO-01', 'Oral Prophylaxis (Light to Moderate)', 12, 'cases'),
-  ('Clinic I', 'Oral Diagnosis', 'ODF-01', 'Complete Oral Diagnosis & Charting (ODF)', 15, 'cases'),
-  ('Clinic II', 'Restorative', 'REST-03', 'Class III/IV Anterior Composite', 6, 'cases'),
-  ('Clinic II', 'Oral Surgery', 'SURG-01', 'Simple Tooth Extraction', 10, 'cases'),
-  ('Clinic II', 'Periodontics', 'PERIO-02', 'Scaling and Root Planing (Deep)', 8, 'cases'),
-  ('Clinic II', 'Prosthodontics', 'PROS-01', 'Complete Denture Fabrication', 2, 'cases'),
-  ('Clinic II', 'Endodontics', 'ENDO-01', 'Anterior Root Canal Therapy', 2, 'cases')
-ON CONFLICT DO NOTHING;
+SELECT v.clinic_level, v.procedure_category, v.procedure_code, v.procedure_name, v.required_count, v.unit
+FROM (
+  VALUES
+    ('Clinic I', 'Restorative', 'REST-01', 'Class I Amalgam/Composite Restoration', 10, 'cases'),
+    ('Clinic I', 'Restorative', 'REST-02', 'Class II Amalgam/Composite Restoration', 8, 'cases'),
+    ('Clinic I', 'Periodontics', 'PERIO-01', 'Oral Prophylaxis (Light to Moderate)', 12, 'cases'),
+    ('Clinic I', 'Oral Diagnosis', 'ODF-01', 'Complete Oral Diagnosis & Charting (ODF)', 15, 'cases'),
+    ('Clinic II', 'Restorative', 'REST-03', 'Class III/IV Anterior Composite', 6, 'cases'),
+    ('Clinic II', 'Oral Surgery', 'SURG-01', 'Simple Tooth Extraction', 10, 'cases'),
+    ('Clinic II', 'Periodontics', 'PERIO-02', 'Scaling and Root Planing (Deep)', 8, 'cases'),
+    ('Clinic II', 'Prosthodontics', 'PROS-01', 'Complete Denture Fabrication', 2, 'cases'),
+    ('Clinic II', 'Endodontics', 'ENDO-01', 'Anterior Root Canal Therapy', 2, 'cases')
+) AS v(clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.clinical_requirements cr
+  WHERE cr.clinic_level = v.clinic_level AND cr.procedure_code = v.procedure_code
+);
