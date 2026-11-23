@@ -351,29 +351,43 @@ CREATE INDEX IF NOT EXISTS idx_student_credits_student_id ON public.student_requ
 CREATE TABLE IF NOT EXISTS public.clinical_audit_ledger (
   seq_num bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   event_id uuid DEFAULT gen_random_uuid() UNIQUE NOT NULL,
+  created_at timestamptz DEFAULT now() NOT NULL,
   timestamp timestamptz DEFAULT timezone('utc'::text, now()) NOT NULL,
   action_type text NOT NULL,
+  actor_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  actor_name text NOT NULL,
+  actor_role text NOT NULL,
+  actor_employee_id text,
   user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   user_email text,
   user_role text,
-  eight_digit_id text,
-  target_id text,
+  eight_digit_id text NOT NULL,
+  target_id text NOT NULL,
   record_hash text NOT NULL,
+  previous_hash text NOT NULL,
+  entry_hash text NOT NULL,
   prev_chain_hash text NOT NULL,
   chain_hash text NOT NULL,
-  record_snapshot jsonb DEFAULT '{}'::jsonb
+  record_snapshot jsonb DEFAULT '{}'::jsonb NOT NULL
 );
 
 ALTER TABLE public.clinical_audit_ledger
   ADD COLUMN IF NOT EXISTS event_id uuid DEFAULT gen_random_uuid(),
+  ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now(),
   ADD COLUMN IF NOT EXISTS timestamp timestamptz DEFAULT timezone('utc'::text, now()),
   ADD COLUMN IF NOT EXISTS action_type text,
+  ADD COLUMN IF NOT EXISTS actor_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS actor_name text,
+  ADD COLUMN IF NOT EXISTS actor_role text,
+  ADD COLUMN IF NOT EXISTS actor_employee_id text,
   ADD COLUMN IF NOT EXISTS user_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   ADD COLUMN IF NOT EXISTS user_email text,
   ADD COLUMN IF NOT EXISTS user_role text,
   ADD COLUMN IF NOT EXISTS eight_digit_id text,
   ADD COLUMN IF NOT EXISTS target_id text,
   ADD COLUMN IF NOT EXISTS record_hash text,
+  ADD COLUMN IF NOT EXISTS previous_hash text,
+  ADD COLUMN IF NOT EXISTS entry_hash text,
   ADD COLUMN IF NOT EXISTS prev_chain_hash text,
   ADD COLUMN IF NOT EXISTS chain_hash text,
   ADD COLUMN IF NOT EXISTS record_snapshot jsonb DEFAULT '{}'::jsonb;
@@ -719,6 +733,15 @@ DECLARE
   v_user_id uuid;
   v_user_email text;
   v_user_role text;
+  v_user_name text;
+  v_user_employee_id text;
+  v_actor_name text;
+  v_actor_role text;
+  v_actor_email text;
+  v_safe_record_hash text;
+  v_safe_eight_digit_id text;
+  v_safe_target_id text;
+  v_now timestamptz := now();
   v_prev_chain_hash text;
   v_new_chain_hash text;
   v_entry_record record;
@@ -728,55 +751,79 @@ BEGIN
     RAISE EXCEPTION 'Unauthorized: User session required for clinical audit logging.';
   END IF;
 
-  SELECT email, role INTO v_user_email, v_user_role
+  SELECT email, role, full_name, employee_id
+  INTO v_user_email, v_user_role, v_user_name, v_user_employee_id
   FROM public.profiles
   WHERE id = v_user_id;
 
-  -- Fetch most recent chain hash (or genesis hash of 64 zeroes)
-  SELECT chain_hash INTO v_prev_chain_hash
+  v_actor_email := COALESCE(NULLIF(btrim(v_user_email), ''), NULLIF(btrim(auth.jwt()->>'email'), ''), 'unknown@iteeth.local');
+  v_actor_name := COALESCE(NULLIF(btrim(v_user_name), ''), v_actor_email, 'Clinic Staff');
+  v_actor_role := COALESCE(NULLIF(btrim(v_user_role), ''), 'clinician');
+  v_safe_record_hash := COALESCE(NULLIF(btrim(p_record_hash), ''), repeat('0', 64));
+  v_safe_eight_digit_id := COALESCE(NULLIF(btrim(p_eight_digit_id), ''), '00000000');
+  v_safe_target_id := COALESCE(p_target_id, '');
+
+  -- Fetch most recent chain hash (supporting both chain_hash and legacy entry_hash, or genesis 64 zeroes)
+  SELECT COALESCE(chain_hash, entry_hash) INTO v_prev_chain_hash
   FROM public.clinical_audit_ledger
   ORDER BY seq_num DESC
   LIMIT 1;
 
-  IF v_prev_chain_hash IS NULL THEN
+  IF v_prev_chain_hash IS NULL OR btrim(v_prev_chain_hash) = '' THEN
     v_prev_chain_hash := repeat('0', 64);
   END IF;
 
-  -- Calculate next cryptographic block hash
+  -- Calculate next cryptographic block hash using canonical UTC timestamp
   v_new_chain_hash := encode(
     sha256(
       concat(
         v_prev_chain_hash,
-        COALESCE(p_record_hash, repeat('0', 64)),
+        v_safe_record_hash,
         p_action_type,
-        COALESCE(p_eight_digit_id, ''),
-        COALESCE(p_target_id, ''),
-        timezone('utc'::text, now())::text
+        v_safe_eight_digit_id,
+        v_safe_target_id,
+        timezone('utc'::text, v_now)::text
       )::bytea
     ),
     'hex'
   );
 
   INSERT INTO public.clinical_audit_ledger (
+    created_at,
+    timestamp,
     action_type,
+    actor_id,
+    actor_name,
+    actor_role,
+    actor_employee_id,
     user_id,
     user_email,
     user_role,
     eight_digit_id,
     target_id,
     record_hash,
+    previous_hash,
+    entry_hash,
     prev_chain_hash,
     chain_hash,
     record_snapshot
   )
   VALUES (
+    v_now,
+    v_now,
     p_action_type,
     v_user_id,
-    COALESCE(v_user_email, auth.jwt()->>'email'),
-    COALESCE(v_user_role, 'clinician'),
-    p_eight_digit_id,
-    p_target_id,
-    COALESCE(p_record_hash, repeat('0', 64)),
+    v_actor_name,
+    v_actor_role,
+    v_user_employee_id,
+    v_user_id,
+    v_actor_email,
+    v_actor_role,
+    v_safe_eight_digit_id,
+    v_safe_target_id,
+    v_safe_record_hash,
+    v_prev_chain_hash,
+    v_new_chain_hash,
     v_prev_chain_hash,
     v_new_chain_hash,
     COALESCE(p_record_snapshot, '{}'::jsonb)
@@ -802,6 +849,8 @@ AS $$
 DECLARE
   v_row record;
   v_expected_prev text := repeat('0', 64);
+  v_row_prev text;
+  v_row_hash text;
   v_expected_hash text;
   v_count integer := 0;
 BEGIN
@@ -813,7 +862,10 @@ BEGIN
     SELECT * FROM public.clinical_audit_ledger ORDER BY seq_num ASC
   LOOP
     v_count := v_count + 1;
-    IF v_row.prev_chain_hash <> v_expected_prev THEN
+    v_row_prev := COALESCE(v_row.prev_chain_hash, v_row.previous_hash);
+    v_row_hash := COALESCE(v_row.chain_hash, v_row.entry_hash);
+
+    IF v_row_prev IS DISTINCT FROM v_expected_prev THEN
       RETURN jsonb_build_object(
         'valid', false,
         'tampered_seq', v_row.seq_num,
@@ -822,30 +874,33 @@ BEGIN
       );
     END IF;
 
-    v_expected_hash := encode(
-      sha256(
-        concat(
-          v_row.prev_chain_hash,
-          v_row.record_hash,
-          v_row.action_type,
-          COALESCE(v_row.eight_digit_id, ''),
-          COALESCE(v_row.target_id, ''),
-          v_row.timestamp::text
-        )::bytea
-      ),
-      'hex'
-    );
-
-    IF v_row.chain_hash <> v_expected_hash THEN
-      RETURN jsonb_build_object(
-        'valid', false,
-        'tampered_seq', v_row.seq_num,
-        'reason', 'Chain hash discrepancy: block hash altered',
-        'inspected_records', v_count
+    -- Verify block hash on entries written with chain_hash
+    IF v_row.chain_hash IS NOT NULL THEN
+      v_expected_hash := encode(
+        sha256(
+          concat(
+            v_row_prev,
+            v_row.record_hash,
+            v_row.action_type,
+            COALESCE(v_row.eight_digit_id, ''),
+            COALESCE(v_row.target_id, ''),
+            timezone('utc'::text, COALESCE(v_row.timestamp, v_row.created_at))::text
+          )::bytea
+        ),
+        'hex'
       );
+
+      IF v_row.chain_hash IS DISTINCT FROM v_expected_hash THEN
+        RETURN jsonb_build_object(
+          'valid', false,
+          'tampered_seq', v_row.seq_num,
+          'reason', 'Chain hash discrepancy: block hash altered',
+          'inspected_records', v_count
+        );
+      END IF;
     END IF;
 
-    v_expected_prev := v_row.chain_hash;
+    v_expected_prev := v_row_hash;
   END LOOP;
 
   RETURN jsonb_build_object(
