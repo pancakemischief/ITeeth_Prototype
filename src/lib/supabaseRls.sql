@@ -1696,23 +1696,51 @@ CREATE POLICY "Allow clinic staff reads from odf-scans"
 -- 7. Initial Seed for Clinical Requirements (CEU Standard Curriculum)
 -- =========================================================================
 
-INSERT INTO public.clinical_requirements (clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
-SELECT v.clinic_level, v.procedure_category, v.procedure_code, v.procedure_name, v.required_count, v.unit
-FROM (
-  VALUES
-    ('Clinic I', 'Restorative', 'REST-01', 'Class I Amalgam/Composite Restoration', 10, 'cases'),
-    ('Clinic I', 'Restorative', 'REST-02', 'Class II Amalgam/Composite Restoration', 8, 'cases'),
-    ('Clinic I', 'Periodontics', 'PERIO-01', 'Oral Prophylaxis (Light to Moderate)', 12, 'cases'),
-    ('Clinic I', 'Oral Diagnosis', 'ODF-01', 'Complete Oral Diagnosis & Charting (ODF)', 15, 'cases'),
-    ('Clinic II', 'Restorative', 'REST-03', 'Class III/IV Anterior Composite', 6, 'cases'),
-    ('Clinic II', 'Oral Surgery', 'SURG-01', 'Simple Tooth Extraction', 10, 'cases'),
-    ('Clinic II', 'Periodontics', 'PERIO-02', 'Scaling and Root Planing (Deep)', 8, 'cases'),
-    ('Clinic II', 'Prosthodontics', 'PROS-01', 'Complete Denture Fabrication', 2, 'cases'),
-    ('Clinic II', 'Endodontics', 'ENDO-01', 'Anterior Root Canal Therapy', 2, 'cases')
-) AS v(clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
-WHERE NOT EXISTS (
-  SELECT 1 FROM public.clinical_requirements cr
-  WHERE cr.clinic_level = v.clinic_level
-    AND (cr.procedure_code = v.procedure_code OR cr.procedure_name = v.procedure_name)
-)
-ON CONFLICT DO NOTHING;
+DO $$
+DECLARE
+  v_row record;
+BEGIN
+  FOR v_row IN
+    SELECT *
+    FROM (
+      VALUES
+        ('Clinic I', 'Restorative', 'REST-01', 'Class I Amalgam/Composite Restoration', 10, 'cases'),
+        ('Clinic I', 'Restorative', 'REST-02', 'Class II Amalgam/Composite Restoration', 8, 'cases'),
+        ('Clinic I', 'Periodontics', 'PERIO-01', 'Oral Prophylaxis (Light to Moderate)', 12, 'cases'),
+        ('Clinic I', 'Oral Diagnosis', 'ODF-01', 'Complete Oral Diagnosis & Charting (ODF)', 15, 'cases'),
+        ('Clinic II', 'Restorative', 'REST-03', 'Class III/IV Anterior Composite', 6, 'cases'),
+        ('Clinic II', 'Oral Surgery', 'SURG-01', 'Simple Tooth Extraction', 10, 'cases'),
+        ('Clinic II', 'Periodontics', 'PERIO-02', 'Scaling and Root Planing (Deep)', 8, 'cases'),
+        ('Clinic II', 'Prosthodontics', 'PROS-01', 'Complete Denture Fabrication', 2, 'cases'),
+        ('Clinic II', 'Endodontics', 'ENDO-01', 'Anterior Root Canal Therapy', 2, 'cases')
+    ) AS v(clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
+  LOOP
+    BEGIN
+      INSERT INTO public.clinical_requirements (
+        clinic_level,
+        procedure_category,
+        procedure_code,
+        procedure_name,
+        required_count,
+        unit
+      )
+      SELECT
+        v_row.clinic_level,
+        v_row.procedure_category,
+        v_row.procedure_code,
+        v_row.procedure_name,
+        v_row.required_count,
+        v_row.unit
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM public.clinical_requirements cr
+        WHERE cr.clinic_level = v_row.clinic_level
+          AND (cr.procedure_code = v_row.procedure_code OR cr.procedure_name = v_row.procedure_name)
+      );
+    EXCEPTION WHEN unique_violation THEN
+      -- Skip cleanly if live table has an existing constraint on (clinic_level, procedure_category)
+      NULL;
+    END;
+  END LOOP;
+END;
+$$;
