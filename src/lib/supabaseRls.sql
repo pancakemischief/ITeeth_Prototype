@@ -1712,5 +1712,7 @@ FROM (
 ) AS v(clinic_level, procedure_category, procedure_code, procedure_name, required_count, unit)
 WHERE NOT EXISTS (
   SELECT 1 FROM public.clinical_requirements cr
-  WHERE cr.clinic_level = v.clinic_level AND cr.procedure_code = v.procedure_code
-);
+  WHERE cr.clinic_level = v.clinic_level
+    AND (cr.procedure_code = v.procedure_code OR cr.procedure_name = v.procedure_name)
+)
+ON CONFLICT DO NOTHING;
